@@ -846,6 +846,93 @@ app.get('/api/settings', (_req: Request, res: Response) => {
   res.json(loadSettings());
 });
 
+// Path autocomplete API - returns directory listings for a given path
+// Used by the PathAutocomplete component in the new conversation dialog
+app.get('/api/paths', (req: Request, res: Response) => {
+  const inputPath = (req.query.path as string) || '';
+
+  // Handle empty path - return home directory contents
+  if (!inputPath) {
+    try {
+      const homeDir = os.homedir();
+      const entries = fs.readdirSync(homeDir, { withFileTypes: true });
+      const results = entries
+        .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+        .slice(0, 20)
+        .map((entry) => ({
+          name: entry.name,
+          path: path.join(homeDir, entry.name),
+          isDirectory: true,
+        }));
+      res.json(results);
+    } catch {
+      res.json([]);
+    }
+    return;
+  }
+
+  // Expand ~ to home directory
+  let expandedPath = inputPath;
+  if (expandedPath.startsWith('~')) {
+    expandedPath = expandedPath.replace(/^~/, os.homedir());
+  }
+
+  // Normalize the path
+  const normalizedPath = path.normalize(expandedPath);
+
+  // Check if the path exists and is a directory
+  try {
+    const stats = fs.statSync(normalizedPath);
+    if (stats.isDirectory()) {
+      // Path is a complete directory - list its contents
+      const entries = fs.readdirSync(normalizedPath, { withFileTypes: true });
+      const results = entries
+        .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+        .slice(0, 20)
+        .map((entry) => ({
+          name: entry.name,
+          path: path.join(normalizedPath, entry.name),
+          isDirectory: true,
+        }));
+      res.json(results);
+      return;
+    }
+  } catch {
+    // Path doesn't exist as-is, try parent directory with partial match
+  }
+
+  // Path might be partial - get parent directory and filter
+  const parentDir = path.dirname(normalizedPath);
+  const partial = path.basename(normalizedPath).toLowerCase();
+
+  try {
+    const stats = fs.statSync(parentDir);
+    if (stats.isDirectory()) {
+      const entries = fs.readdirSync(parentDir, { withFileTypes: true });
+      const results = entries
+        .filter(
+          (entry) =>
+            entry.isDirectory() &&
+            !entry.name.startsWith('.') &&
+            entry.name.toLowerCase().startsWith(partial)
+        )
+        .slice(0, 20)
+        .map((entry) => ({
+          name: entry.name,
+          path: path.join(parentDir, entry.name),
+          isDirectory: true,
+        }));
+      res.json(results);
+      return;
+    }
+  } catch {
+    // Parent directory doesn't exist either
+  }
+
+  // Return empty array for invalid paths
+  res.json([]);
+});
+
 app.post('/api/settings', (req: Request, res: Response) => {
   const settings = { ...loadSettings(), ...req.body };
   saveSettings(settings);

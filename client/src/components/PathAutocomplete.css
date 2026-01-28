@@ -1,0 +1,147 @@
+/* =============================================================================
+   PathAutocomplete.css - Path Input with Autocomplete Styles
+
+   This component provides directory path autocompletion for the new conversation
+   dialog. It follows the Solarized Dark theme using CSS variables from index.css.
+   ============================================================================= */
+
+.path-autocomplete {
+  position: relative;
+  width: 100%;
+}
+
+.path-input-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.path-input {
+  width: 100%;
+  padding: 8px 12px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  color: var(--text-emphasis);
+  font-size: 12px;
+  font-family: monospace;
+  box-sizing: border-box;
+  transition: border-color 0.2s;
+}
+
+.path-input:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}
+
+.path-input::placeholder {
+  color: var(--text-muted);
+}
+
+/* Loading indicator - small spinning dot */
+.path-loading-indicator {
+  position: absolute;
+  right: 10px;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--border-subtle);
+  border-top-color: var(--accent-primary);
+  border-radius: 50%;
+  animation: path-spinner 0.6s linear infinite;
+}
+
+@keyframes path-spinner {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Suggestions dropdown */
+.path-suggestions {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  margin-top: 4px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  max-height: 200px;
+  overflow-y: auto;
+  z-index: 100;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.path-suggestion-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.path-suggestion-item:last-child {
+  border-bottom: none;
+}
+
+.path-suggestion-item:hover,
+.path-suggestion-item.selected {
+  background: var(--bg-tertiary);
+}
+
+/* Folder icon */
+.path-folder-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--sol-yellow);
+  flex-shrink: 0;
+}
+
+/* Directory name (bold) */
+.path-suggestion-name {
+  font-weight: 500;
+  color: var(--text-emphasis);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* Full path (dimmed, truncated) */
+.path-suggestion-path {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-left: auto;
+  max-width: 60%;
+}
+
+/* No results message */
+.path-no-results {
+  padding: 12px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+/* Scrollbar styling for suggestions dropdown */
+.path-suggestions::-webkit-scrollbar {
+  width: 6px;
+}
+
+.path-suggestions::-webkit-scrollbar-track {
+  background: var(--bg-secondary);
+}
+
+.path-suggestions::-webkit-scrollbar-thumb {
+  background: var(--border-subtle);
+  border-radius: 3px;
+}
+
+.path-suggestions::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}

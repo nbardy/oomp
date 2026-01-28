@@ -2,6 +2,7 @@ import type { Provider } from '@claude-web-view/shared';
 import { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
+import { PathAutocomplete } from './PathAutocomplete';
 import './Sidebar.css';
 
 export function Sidebar() {
@@ -83,12 +84,11 @@ export function Sidebar() {
 
         {showPicker && (
           <div className="directory-picker">
-            <input
-              type="text"
-              className="directory-input"
+            <PathAutocomplete
               value={directory}
-              onChange={(e) => setDirectory(e.target.value)}
+              onChange={setDirectory}
               placeholder="/path/to/directory"
+              className="directory-input"
             />
             <div className="provider-selector">
               <label className={`provider-option ${provider === 'claude' ? 'selected' : ''}`}>
