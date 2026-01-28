@@ -1,0 +1,267 @@
+/**
+ * Claude CLI Provider
+ *
+ * DESIGN: One clean path, no fallbacks, fail eagerly.
+ *
+ * Handles spawning and parsing Claude CLI (--output-format=stream-json)
+ *
+ * KNOWN OUTPUT TYPES from Claude CLI:
+ * - {"type":"system","subtype":"init",...} - Session initialized
+ * - {"type":"assistant","message":{"content":[...],...}} - Response with content
+ * - {"type":"result","subtype":"success|error",...} - Complete
+ * - {"type":"user",...} - Echo of user message (ignored, returns message_start)
+ *
+ * Any other type throws ProviderParseError.
+ *
+ * PERMISSIONS:
+ * Set CLAUDE_MAX_PERMISSIONS=true to bypass all permission prompts.
+ * This adds --dangerously-skip-permissions to skip file/bash confirmations.
+ * WARNING: Only use in trusted/sandboxed environments with no internet access.
+ */
+
+import { ProviderParseError, type Provider, type SpawnConfig, type ProviderEvent } from './index';
+
+// =============================================================================
+// Claude CLI JSON Output Types - STRICT, NO CATCH-ALL
+// =============================================================================
+
+interface ClaudeSystemInit {
+  type: 'system';
+  subtype: 'init';
+}
+
+interface ClaudeTextContent {
+  type: 'text';
+  text: string;
+}
+
+interface ClaudeToolUseContent {
+  type: 'tool_use';
+  name: string;
+  input: Record<string, unknown>;
+}
+
+interface ClaudeToolResultContent {
+  type: 'tool_result';
+  tool_use_id: string;
+  content: string;
+}
+
+type ClaudeContentItem = ClaudeTextContent | ClaudeToolUseContent | ClaudeToolResultContent;
+
+interface ClaudeAssistantMessage {
+  type: 'assistant';
+  message: {
+    content: ClaudeContentItem[];
+  };
+}
+
+interface ClaudeUserMessage {
+  type: 'user';
+}
+
+interface ClaudeResult {
+  type: 'result';
+  subtype: 'success' | 'error';
+  result?: string;
+}
+
+// Streaming events (with --include-partial-messages)
+interface ClaudeStreamEvent {
+  type: 'stream_event';
+  event: {
+    type: string;
+    delta?: {
+      type?: string;
+      text?: string;
+      stop_reason?: string;
+    };
+    content_block?: {
+      type: string;
+      text?: string;
+      name?: string;
+    };
+  };
+}
+
+// Discriminated union - ONLY these types are valid
+type ClaudeOutput =
+  | ClaudeSystemInit
+  | ClaudeAssistantMessage
+  | ClaudeUserMessage
+  | ClaudeResult
+  | ClaudeStreamEvent;
+
+// Type guard for valid Claude output
+function isClaudeOutput(data: unknown): data is ClaudeOutput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as { type?: unknown };
+  return (
+    obj.type === 'system' ||
+    obj.type === 'assistant' ||
+    obj.type === 'user' ||
+    obj.type === 'result' ||
+    obj.type === 'stream_event'
+  );
+}
+
+// =============================================================================
+// Provider Implementation
+// =============================================================================
+
+const claudeProvider: Provider = {
+  name: 'claude',
+
+  getSpawnConfig(sessionId: string, workingDir: string, resume = false): SpawnConfig {
+    // Simple and reliable: one process per turn
+    // -p (--print): Process one message then exit
+    // --resume: Continue existing session for context
+    // --output-format stream-json: Real-time streaming output
+    // --include-partial-messages: Get streaming chunks as they arrive
+    const args = [
+      '-p',
+      '--verbose',
+      '--output-format', 'stream-json',
+      '--include-partial-messages',
+    ];
+
+    // MAX PERMISSIONS MODE (enabled by default):
+    // Bypass all permission prompts. Set CLAUDE_MAX_PERMISSIONS=false to disable.
+    // This grants Claude CLI full access to:
+    //   - File operations (Read, Edit, Write)
+    //   - Bash command execution
+    //   - All other tools without confirmation
+    // WARNING: Only use in trusted/sandboxed environments!
+    const maxPermissions = process.env.CLAUDE_MAX_PERMISSIONS !== 'false';
+    if (maxPermissions) {
+      args.push(
+        '--dangerously-skip-permissions',
+        '--permission-mode', 'bypassPermissions',
+        '--tools', 'default',
+        '--add-dir', workingDir
+      );
+      console.log('[claude] MAX PERMISSIONS MODE enabled');
+    }
+
+    // First turn: create session. Subsequent turns: resume it.
+    if (resume) {
+      args.push('--resume', sessionId);
+    } else {
+      args.push('--session-id', sessionId);
+    }
+
+    return {
+      command: 'claude',
+      args,
+      options: {
+        cwd: workingDir,
+      },
+    };
+  },
+
+  formatInput(content: string): string {
+    return `${content}\n`;
+  },
+
+  /**
+   * Parse Claude CLI JSON output into unified events.
+   * @throws ProviderParseError on unknown message types - no fallbacks.
+   */
+  parseOutput(json: unknown): ProviderEvent {
+    // Validate this is a known Claude output type
+    if (!isClaudeOutput(json)) {
+      throw new ProviderParseError(
+        'claude',
+        json,
+        `Unknown message type: ${JSON.stringify(json)}`
+      );
+    }
+
+    switch (json.type) {
+      case 'system':
+        if (json.subtype === 'init') {
+          return { type: 'message_start' };
+        }
+        throw new ProviderParseError(
+          'claude',
+          json,
+          `Unknown system subtype: ${(json as { subtype?: string }).subtype}`
+        );
+
+      case 'user':
+        // Echo of user message - treat as start of assistant response
+        return { type: 'message_start' };
+
+      case 'stream_event': {
+        // Streaming events from --include-partial-messages
+        const eventType = json.event?.type;
+
+        switch (eventType) {
+          case 'content_block_delta':
+            // Streaming text chunk!
+            if (json.event.delta?.type === 'text_delta' && json.event.delta.text) {
+              return { type: 'text_delta', text: json.event.delta.text };
+            }
+            // Tool input delta - ignore for now
+            return { type: 'message_start' }; // no-op
+
+          case 'content_block_start':
+            // Content block starting - check if it's a tool use
+            if (json.event.content_block?.type === 'tool_use') {
+              const name = json.event.content_block.name || 'unknown';
+              const id = (json.event.content_block as { id?: string }).id || '';
+
+              // Special handling for Task tool (sub-agent spawn)
+              // Note: We'll get full input later in content_block_delta events
+              // For now, we emit a tool_use event; server will track it as potential subagent
+              return {
+                type: 'tool_use',
+                name,
+                input: { _blockId: id },  // Pass block ID for correlation
+                displayText: name === 'Task' ? '' : `\n[Using tool: ${name}]\n`,
+              };
+            }
+            return { type: 'message_start' }; // no-op for text blocks
+
+          case 'message_start':
+          case 'content_block_stop':
+          case 'message_delta':
+          case 'message_stop':
+            // These are structural events, not content - treat as no-op
+            return { type: 'message_start' };
+
+          default:
+            // Unknown stream event type - log but don't crash
+            console.warn(`[claude] Unknown stream_event type: ${eventType}`);
+            return { type: 'message_start' };
+        }
+      }
+
+      case 'assistant': {
+        // Full assistant message (sent after streaming completes)
+        // With --include-partial-messages, we already got the content via stream_event
+        // So this is just a confirmation - don't re-emit the text (would cause duplicates!)
+        const content = json.message?.content;
+        const textBlock = Array.isArray(content) ? content.find((b: ClaudeContentItem) => b.type === 'text') : null;
+        const textLength = (textBlock as ClaudeTextContent | null)?.text?.length ?? 0;
+        console.log(`[claude] assistant message arrived (${textLength} chars) - IGNORING to prevent dupe`);
+        return { type: 'message_start' };
+      }
+
+      case 'result':
+        return { type: 'message_complete' };
+
+      default: {
+        // TypeScript exhaustive check
+        const _exhaustive: never = json;
+        throw new ProviderParseError(
+          'claude',
+          _exhaustive,
+          'Unhandled message type'
+        );
+      }
+    }
+  },
+};
+
+export default claudeProvider;

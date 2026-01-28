@@ -1,0 +1,280 @@
+/* =============================================================================
+   Sidebar.css - Sidebar Styles (Solarized Dark Theme)
+   ============================================================================= */
+
+.sidebar {
+  width: 280px;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-header {
+  padding: 20px;
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.gallery-btn {
+  width: 100%;
+  padding: 10px 20px;
+  background: var(--accent-primary);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: background 0.2s;
+}
+
+.gallery-btn:hover {
+  background: var(--accent-primary-hover);
+}
+
+.new-chat-btn {
+  width: 100%;
+  padding: 12px 20px;
+  background: var(--bg-tertiary);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: background 0.2s;
+}
+
+.new-chat-btn:hover {
+  background: var(--border-color);
+}
+
+.directory-picker {
+  margin-top: 12px;
+}
+
+.directory-input {
+  width: 100%;
+  padding: 8px 12px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  color: var(--text-emphasis);
+  font-size: 12px;
+  font-family: monospace;
+  margin-bottom: 8px;
+  box-sizing: border-box;
+}
+
+.directory-input:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}
+
+.provider-selector {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.provider-option {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.provider-option:hover {
+  background: var(--border-color);
+  color: var(--text-primary);
+}
+
+.provider-option.selected {
+  background: var(--bg-tertiary);
+  border-color: var(--accent-primary);
+  color: #fff;
+}
+
+.provider-option input[type="radio"] {
+  display: none;
+}
+
+.directory-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.dir-action-btn {
+  flex: 1;
+  padding: 6px 12px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.dir-confirm-btn {
+  background: var(--accent-success);
+  color: white;
+}
+
+.dir-confirm-btn:disabled {
+  background: var(--text-muted);
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.dir-cancel-btn {
+  background: var(--bg-tertiary);
+  color: white;
+}
+
+.dir-cancel-btn:hover {
+  background: var(--border-color);
+}
+
+.ws-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+.status-dot.connected {
+  background: var(--sol-cyan);
+}
+
+.status-dot.connecting {
+  background: var(--sol-yellow);
+}
+
+.status-dot.disconnected {
+  background: var(--sol-red);
+}
+
+.conversations-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px;
+}
+
+.conversation-item {
+  padding: 12px 16px;
+  margin-bottom: 6px;
+  background: var(--bg-tertiary);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.2s;
+  position: relative;
+}
+
+.conversation-item:hover {
+  background: var(--border-subtle);
+}
+
+.conversation-item.active {
+  background: var(--border-color);
+  border-left: 3px solid var(--accent-primary);
+}
+
+.conversation-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.conversation-id {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-family: monospace;
+}
+
+.status-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+.status-indicator.running {
+  background: var(--sol-cyan);
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.conversation-preview {
+  font-size: 13px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.conversation-dir {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 4px;
+  font-family: monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.delete-btn {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 4px 8px;
+  background: var(--accent-error);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.conversation-item:hover .delete-btn {
+  opacity: 1;
+}
+
+.delete-btn:hover {
+  background: #c9302c;  /* Darker red */
+}

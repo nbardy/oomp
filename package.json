@@ -1,0 +1,22 @@
+{
+  "name": "claude-web-view",
+  "version": "1.0.0",
+  "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "dev": "concurrently -n server,client -c blue,green \"pnpm dev:server\" \"pnpm dev:client\"",
+    "dev:server": "pnpm --filter @claude-web-view/server dev",
+    "dev:client": "pnpm --filter @claude-web-view/client dev",
+    "build": "pnpm --filter @claude-web-view/shared build && pnpm --filter @claude-web-view/client build",
+    "start": "pnpm --filter @claude-web-view/server start",
+    "test": "node test/api.test.js",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "concurrently": "^9.1.2",
+    "ws": "^8.14.2"
+  }
+}

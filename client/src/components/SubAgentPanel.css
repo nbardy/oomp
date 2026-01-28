@@ -1,0 +1,237 @@
+/* =============================================================================
+   SubAgentPanel.css - Sub-Agent Display Styles (Solarized Dark Theme)
+
+   Displays Claude's Task tool sub-agents in a tree-like structure.
+   Matches the Claude CLI terminal output style.
+   ============================================================================= */
+
+.subagent-panel {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  margin: 0 24px 16px 24px;
+  font-family: "Monaco", "Menlo", "Consolas", monospace;
+  font-size: 13px;
+  overflow: hidden;
+}
+
+/* Header - clickable to expand/collapse */
+.subagent-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  cursor: pointer;
+  user-select: none;
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border-subtle);
+  transition: background 0.15s;
+}
+
+.subagent-header:hover {
+  background: rgba(108, 113, 196, 0.1);
+}
+
+.subagent-header:focus {
+  outline: none;
+  background: rgba(108, 113, 196, 0.15);
+}
+
+/* Status indicator dot */
+.subagent-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.subagent-indicator.running {
+  background: var(--sol-green);
+  animation: indicator-pulse 1.5s infinite;
+}
+
+.subagent-indicator.done {
+  background: var(--sol-cyan);
+}
+
+@keyframes indicator-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* Summary text */
+.subagent-summary {
+  color: var(--text-emphasis);
+  font-weight: 500;
+  flex: 1;
+}
+
+/* Shortcut hint */
+.subagent-shortcut {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+/* Tree view container */
+.subagent-tree {
+  padding: 8px 14px 12px 14px;
+}
+
+/* Individual sub-agent item */
+.subagent-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  padding: 4px 0;
+  line-height: 1.4;
+}
+
+/* Tree connectors (Unicode box-drawing characters) */
+.tree-connector {
+  color: var(--text-muted);
+  flex-shrink: 0;
+  width: 20px;
+  font-family: "Monaco", "Menlo", monospace;
+}
+
+.tree-connector-sub {
+  color: var(--text-muted);
+  flex-shrink: 0;
+  width: 20px;
+  font-family: "Monaco", "Menlo", monospace;
+}
+
+.action-connector {
+  color: var(--text-muted);
+  flex-shrink: 0;
+  margin-right: 4px;
+  font-family: "Monaco", "Menlo", monospace;
+}
+
+/* Status indicator for each agent */
+.subagent-status {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-right: 8px;
+  font-size: 12px;
+}
+
+.subagent-status.running,
+.subagent-status.pending {
+  color: var(--sol-green);
+}
+
+.subagent-status.completed {
+  color: var(--sol-cyan);
+}
+
+.subagent-status.error {
+  color: var(--sol-red);
+}
+
+/* Spinner for running status */
+.status-spinner {
+  width: 10px;
+  height: 10px;
+  border: 2px solid transparent;
+  border-top-color: var(--sol-green);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Agent info container */
+.subagent-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px;
+}
+
+/* Description text */
+.subagent-description {
+  color: var(--text-emphasis);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+/* Stats (tool uses, tokens) */
+.subagent-stats {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.stat-divider {
+  color: var(--text-muted);
+}
+
+.stat {
+  white-space: nowrap;
+}
+
+/* Current action line (nested under the agent) */
+.subagent-current-action {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  margin-top: 2px;
+  padding-left: 20px; /* Align with tree structure */
+}
+
+.current-action {
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.current-action.active {
+  color: var(--sol-yellow);
+}
+
+.current-action.done {
+  color: var(--sol-cyan);
+}
+
+/* Animation for new sub-agents appearing */
+@keyframes slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.subagent-item {
+  animation: slide-in 0.2s ease-out;
+}
+
+/* Completed agents fade slightly */
+.subagent-item:has(.subagent-status.completed),
+.subagent-item:has(.subagent-status.error) {
+  opacity: 0.7;
+}
+
+.subagent-item:has(.subagent-status.completed):hover,
+.subagent-item:has(.subagent-status.error):hover {
+  opacity: 1;
+}

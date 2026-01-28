@@ -1,0 +1,73 @@
+.folder-filter {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: #252525;
+  border-bottom: 1px solid #3a3a3a;
+  flex-wrap: wrap;
+}
+
+.folder-filter-label {
+  font-size: 12px;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 600;
+}
+
+.folder-filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.folder-chip {
+  padding: 4px 12px;
+  background: #3a3a3a;
+  border: 1px solid #4a4a4a;
+  border-radius: 16px;
+  color: #888;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-chip:hover {
+  background: #4a4a4a;
+  border-color: #5a5a5a;
+}
+
+.folder-chip.active {
+  color: #e0e0e0;
+}
+
+.folder-chip.selected {
+  background: rgba(124, 58, 237, 0.2);
+  border-color: #7c3aed;
+  color: #a78bfa;
+}
+
+.folder-chip.selected:hover {
+  background: rgba(124, 58, 237, 0.3);
+}
+
+.folder-filter-clear {
+  padding: 4px 10px;
+  background: transparent;
+  border: 1px solid #4a4a4a;
+  border-radius: 4px;
+  color: #888;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.folder-filter-clear:hover {
+  background: #3a3a3a;
+  color: #e0e0e0;
+}

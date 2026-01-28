@@ -1,0 +1,832 @@
+/* =============================================================================
+   Chat.css - Chat View Styles (Solarized Dark Theme)
+   ============================================================================= */
+
+.chat-view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  min-height: 0; /* Critical for flex child scrolling */
+  overflow: hidden; /* Contain the scrollable child */
+}
+
+.chat-header {
+  padding: 16px 24px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.chat-title {
+  font-size: 14px;
+  color: var(--text-secondary);
+  font-family: monospace;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.chat-id {
+  color: var(--text-emphasis);
+}
+
+.chat-dir {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+/* Provider badge */
+.provider-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.provider-badge.provider-claude {
+  background: rgba(108, 113, 196, 0.2);  /* Violet with transparency */
+  color: var(--sol-violet);
+}
+
+.provider-badge.provider-codex {
+  background: rgba(42, 161, 152, 0.2);  /* Cyan with transparency */
+  color: var(--sol-cyan);
+}
+
+.messages-container {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+}
+
+.message {
+  margin-bottom: 20px;
+  max-width: 800px;
+}
+
+.message.user {
+  margin-left: auto;
+}
+
+.message-role {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 600;
+}
+
+.message-role.user {
+  color: var(--accent-user);
+}
+
+.message-role.assistant {
+  color: var(--accent-assistant);
+}
+
+.message-content {
+  padding: 12px 16px;
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: "Monaco", "Menlo", monospace;
+  font-size: 13px;
+  color: var(--text-emphasis);
+}
+
+.message.user .message-content {
+  background: var(--bg-user-message);
+  border-left: 3px solid var(--accent-user);
+}
+
+.message.assistant .message-content {
+  background: var(--bg-assistant-message);
+  border-left: 3px solid var(--accent-assistant);
+}
+
+/* System / loop marker messages */
+.message.system .message-content {
+  background: transparent;
+  border: none;
+  padding: 4px 0;
+}
+
+.message.loop-marker {
+  background: transparent;
+  margin: 8px 0;
+}
+
+.message.loop-marker .message-content {
+  text-align: center;
+  color: var(--accent-loop);
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 1px;
+  background: transparent;
+  border: none;
+  padding: 8px 0;
+}
+
+/* Header status area */
+.header-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* Ready badge in header */
+.ready-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.ready-badge.waiting {
+  background: var(--accent-warning);
+  color: var(--bg-primary);
+  animation: pulse 1.5s infinite;
+}
+
+/* Loop badge in header */
+.loop-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  background: var(--accent-loop);
+  border-radius: 12px;
+  font-size: 12px;
+  color: white;
+  font-weight: 500;
+  animation: pulse 1.5s infinite;
+}
+
+.input-container {
+  padding: 20px 24px;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.input-wrapper {
+  display: flex;
+  gap: 12px;
+  max-width: 1000px;
+  margin: 0 auto;
+  position: relative;
+  align-items: center; /* Center buttons vertically */
+}
+
+.input-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-shrink: 0;
+  max-height: 44px; /* Fixed height - don't grow with textarea */
+}
+
+.message-input {
+  flex: 1;
+  padding: 12px 16px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  color: var(--text-emphasis);
+  font-size: 14px;
+  font-family: inherit;
+  resize: none;
+  min-height: 44px;
+  max-height: 600px;
+  overflow-y: auto;
+  line-height: 1.5;
+}
+
+.message-input:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}
+
+/* Visual indicator when in queue mode (Claude is running, messages will be queued) */
+.message-input.queue-mode {
+  border-color: var(--accent-queue);
+  background: var(--bg-assistant-message);
+}
+
+.send-btn {
+  padding: 12px 24px;
+  background: var(--accent-primary);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background 0.2s;
+  white-space: nowrap;
+}
+
+.send-btn:hover {
+  background: var(--accent-primary-hover);
+}
+
+/* Queue mode styling for send button */
+.send-btn.queue-mode {
+  background: var(--accent-queue);
+}
+
+.send-btn.queue-mode:hover {
+  background: #3498db;  /* Lighter blue for hover */
+}
+
+.send-btn:disabled,
+.loop-btn:disabled,
+.save-prompt-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Loop button */
+.loop-btn {
+  padding: 4px;
+  background: var(--bg-tertiary);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.loop-btn:hover:not(:disabled) {
+  background: var(--border-color);
+  transform: scale(1.05);
+}
+
+.loop-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+/* Save prompt button */
+.save-prompt-btn {
+  padding: 4px;
+  background: var(--bg-tertiary);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.save-prompt-btn:hover:not(:disabled) {
+  background: var(--border-color);
+  transform: scale(1.05);
+}
+
+.save-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+/* Loop popup */
+.loop-popup {
+  position: absolute;
+  bottom: 100%;
+  right: 0;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 8px;
+  min-width: 220px;
+  z-index: 100;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.loop-header {
+  font-weight: 600;
+  margin-bottom: 12px;
+  color: var(--text-emphasis);
+}
+
+.loop-options {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.loop-option {
+  flex: 1;
+  padding: 8px 12px;
+  background: var(--bg-tertiary);
+  border-radius: 6px;
+  text-align: center;
+  cursor: pointer;
+  transition: background 0.2s;
+  color: var(--text-primary);
+}
+
+.loop-option:hover {
+  background: var(--border-color);
+}
+
+.loop-option.selected {
+  background: var(--accent-primary);
+  color: white;
+}
+
+.loop-option input {
+  display: none;
+}
+
+.clear-context-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.clear-context-option input {
+  accent-color: var(--accent-primary);
+}
+
+.start-loop-btn {
+  width: 100%;
+  padding: 10px 16px;
+  background: var(--accent-primary);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 500;
+  transition: background 0.2s;
+}
+
+.start-loop-btn:hover {
+  background: var(--accent-primary-hover);
+}
+
+/* Cancel loop button */
+.cancel-loop-btn {
+  padding: 8px 16px;
+  background: var(--accent-error);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  margin-bottom: 12px;
+  transition: background 0.2s;
+}
+
+.cancel-loop-btn:hover {
+  background: #c9302c;  /* Darker red */
+}
+
+.empty-state {
+  padding: 40px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.status-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+.status-indicator.running {
+  background: var(--accent-success);
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* Typing indicator */
+.typing-indicator {
+  display: flex;
+  gap: 6px;
+  padding: 12px 16px;
+  margin-bottom: 20px;
+}
+
+.typing-dot {
+  width: 8px;
+  height: 8px;
+  background: var(--accent-primary);
+  border-radius: 50%;
+  animation: typing-bounce 1.4s infinite ease-in-out both;
+}
+
+.typing-dot:nth-child(1) {
+  animation-delay: -0.32s;
+}
+
+.typing-dot:nth-child(2) {
+  animation-delay: -0.16s;
+}
+
+@keyframes typing-bounce {
+  0%, 80%, 100% {
+    transform: scale(0.6);
+    opacity: 0.4;
+  }
+  40% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* =============================================================================
+   MARKDOWN STYLING
+   - Supports GitHub Flavored Markdown (GFM): tables, strikethrough, task lists
+   - Uses highlight.js for syntax highlighting (solarized-dark theme)
+   ============================================================================= */
+
+/* Headings */
+.message-content h1,
+.message-content h2,
+.message-content h3,
+.message-content h4,
+.message-content h5,
+.message-content h6 {
+  margin: 16px 0 8px 0;
+  color: var(--text-emphasis);
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.message-content h1 { font-size: 1.5em; border-bottom: 1px solid var(--border-subtle); padding-bottom: 8px; }
+.message-content h2 { font-size: 1.3em; border-bottom: 1px solid var(--border-subtle); padding-bottom: 6px; }
+.message-content h3 { font-size: 1.15em; }
+.message-content h4 { font-size: 1.05em; }
+.message-content h5 { font-size: 1em; }
+.message-content h6 { font-size: 0.95em; color: var(--text-secondary); }
+
+/* Paragraphs */
+.message-content p {
+  margin: 8px 0;
+}
+
+/* Inline code */
+.message-content code {
+  background: var(--sol-base03);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: "Monaco", "Menlo", "Consolas", monospace;
+  font-size: 0.9em;
+  color: var(--sol-orange);
+}
+
+/* Code blocks with syntax highlighting */
+.message-content pre {
+  background: var(--sol-base03);
+  padding: 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin: 12px 0;
+  border: 1px solid var(--sol-base02);
+}
+
+.message-content pre code {
+  background: none;
+  padding: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* Override highlight.js background to match our code blocks */
+.message-content pre code.hljs {
+  background: transparent;
+  padding: 0;
+}
+
+/* Tables (GFM) */
+.message-content table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 12px 0;
+  font-size: 0.95em;
+}
+
+.message-content th,
+.message-content td {
+  border: 1px solid var(--border-subtle);
+  padding: 8px 12px;
+  text-align: left;
+}
+
+.message-content th {
+  background: var(--sol-base02);
+  color: var(--text-emphasis);
+  font-weight: 600;
+}
+
+.message-content tr:nth-child(even) {
+  background: rgba(0, 43, 54, 0.3);
+}
+
+.message-content tr:hover {
+  background: rgba(0, 43, 54, 0.5);
+}
+
+/* Lists */
+.message-content ul,
+.message-content ol {
+  margin: 8px 0;
+  padding-left: 24px;
+}
+
+.message-content li {
+  margin: 4px 0;
+}
+
+.message-content li > ul,
+.message-content li > ol {
+  margin: 4px 0;
+}
+
+/* Task lists (GFM) */
+.message-content ul.contains-task-list {
+  list-style: none;
+  padding-left: 0;
+}
+
+.message-content li.task-list-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.message-content li.task-list-item input[type="checkbox"] {
+  margin-top: 4px;
+  accent-color: var(--accent-user);
+  cursor: default;
+}
+
+/* Strikethrough (GFM) */
+.message-content del {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+
+/* Strong / Bold */
+.message-content strong {
+  color: var(--text-emphasis);
+  font-weight: 600;
+}
+
+/* Emphasis / Italic */
+.message-content em {
+  font-style: italic;
+  color: var(--sol-yellow);
+}
+
+/* Links */
+.message-content a {
+  color: var(--sol-blue);
+  text-decoration: none;
+}
+
+.message-content a:hover {
+  text-decoration: underline;
+  color: var(--sol-cyan);
+}
+
+/* Blockquotes */
+.message-content blockquote {
+  border-left: 4px solid var(--accent-primary);
+  margin: 12px 0;
+  padding: 8px 16px;
+  background: rgba(108, 113, 196, 0.1);
+  color: var(--text-emphasis);
+}
+
+.message-content blockquote p {
+  margin: 4px 0;
+}
+
+/* Horizontal rules */
+.message-content hr {
+  border: none;
+  border-top: 1px solid var(--border-subtle);
+  margin: 16px 0;
+}
+
+/* Images */
+.message-content img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+  margin: 8px 0;
+}
+
+/* Definition lists */
+.message-content dl {
+  margin: 8px 0;
+}
+
+.message-content dt {
+  font-weight: 600;
+  color: var(--text-emphasis);
+  margin-top: 8px;
+}
+
+.message-content dd {
+  margin-left: 24px;
+  color: var(--text-emphasis);
+}
+
+/* Queue badge in header - shows when messages are queued */
+.queue-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  background: var(--accent-queue);
+  border-radius: 12px;
+  font-size: 12px;
+  color: white;
+  font-weight: 500;
+}
+
+/* Clear queue button in header badge */
+.clear-queue-btn {
+  background: rgba(255, 255, 255, 0.2);
+  border: none;
+  color: white;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.clear-queue-btn:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* Queued messages container - shown above the input */
+.queued-messages {
+  max-width: 1000px;
+  margin: 0 auto 12px;
+  background: rgba(38, 139, 210, 0.1);  /* Blue with transparency */
+  border: 1px solid rgba(38, 139, 210, 0.3);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.queued-messages-header {
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* Clear all button in queued messages header */
+.clear-queue-header-btn {
+  background: rgba(220, 50, 47, 0.2);  /* Red with transparency */
+  border: 1px solid rgba(220, 50, 47, 0.4);
+  color: var(--accent-error);
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.clear-queue-header-btn:hover {
+  background: var(--accent-error);
+  color: white;
+}
+
+.queued-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  background: var(--accent-queue);
+  color: white;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.queued-messages-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.queued-message-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(38, 139, 210, 0.15);
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--text-emphasis);
+  border-left: 3px solid var(--text-secondary);
+}
+
+/* Sending state for queued message */
+.queued-message-item.sending {
+  border-left-color: var(--accent-queue);
+  background: rgba(38, 139, 210, 0.25);
+  animation: queue-pulse 1.5s infinite;
+}
+
+@keyframes queue-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+.queued-message-content {
+  flex: 1;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: "Monaco", "Menlo", monospace;
+  opacity: 0.85;
+  /* Truncate long messages in the queue display */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.queued-message-remove {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: rgba(220, 50, 47, 0.3);
+  color: var(--accent-error);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: bold;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+
+.queued-message-remove:hover {
+  background: var(--accent-error);
+  color: white;
+}
+
+/* Queue status indicator (e.g., "#1 in queue" or "Sending...") */
+.queued-message-status {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-secondary);
+  padding: 2px 6px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
+.queued-message-item.sending .queued-message-status {
+  color: var(--accent-queue);
+  background: rgba(38, 139, 210, 0.2);
+}

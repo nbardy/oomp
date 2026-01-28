@@ -1,0 +1,285 @@
+/* =============================================================================
+   Gallery.css - Gallery View Styles (Solarized Dark Theme)
+   ============================================================================= */
+
+.gallery-view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* Gallery content container - scrollable area for all project sections */
+.gallery-content {
+  flex: 1;
+  padding: 24px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+}
+
+/* =============================================================================
+   Project Section Styles - Grouping conversations by working directory
+   ============================================================================= */
+
+.project-section {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Project header - sticky, clickable to collapse/expand */
+.project-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  background: var(--bg-tertiary);
+  border-radius: 8px;
+  cursor: pointer;
+  user-select: none;
+  margin-bottom: 16px;
+  transition: background 0.2s;
+}
+
+.project-header:hover {
+  background: var(--bg-secondary);
+}
+
+.project-header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Chevron indicator for collapse state */
+.project-chevron {
+  font-size: 10px;
+  color: var(--text-secondary);
+  transition: transform 0.2s;
+}
+
+.project-chevron.collapsed {
+  transform: rotate(-90deg);
+}
+
+/* Project path display */
+.project-path {
+  font-family: monospace;
+  font-size: 14px;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+/* Conversation count badge */
+.project-count {
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 4px 10px;
+  background: var(--bg-primary);
+  border-radius: 12px;
+}
+
+/* Grid layout for cards within a project */
+.project-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 20px;
+  align-content: start;
+}
+
+/* Show more/less button */
+.show-more-btn {
+  margin-top: 16px;
+  padding: 10px 20px;
+  background: transparent;
+  border: 1px dashed var(--border-subtle);
+  border-radius: 8px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.2s;
+  align-self: center;
+}
+
+.show-more-btn:hover {
+  background: var(--bg-tertiary);
+  border-color: var(--accent-primary);
+  color: var(--text-primary);
+}
+
+/* Legacy gallery-grid (kept for backwards compatibility if needed) */
+.gallery-grid {
+  flex: 1;
+  padding: 24px;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 20px;
+  align-content: start;
+}
+
+.empty-state {
+  padding: 40px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.gallery-card {
+  background: var(--bg-secondary);
+  border-radius: 8px;
+  padding: 20px;
+  border: 1px solid var(--border-subtle);
+  border-top: 4px solid transparent; /* Viridis accent color applied via inline style */
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.gallery-card:hover {
+  border-left-color: var(--accent-primary);
+  border-right-color: var(--accent-primary);
+  border-bottom-color: var(--accent-primary);
+  /* border-top-color is set by viridis inline style - preserved on hover */
+  transform: translateY(-2px);
+}
+
+.gallery-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.gallery-card-id {
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-family: monospace;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Provider badge */
+.provider-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.provider-badge.provider-claude {
+  background: rgba(108, 113, 196, 0.2);  /* Violet with transparency */
+  color: var(--sol-violet);
+}
+
+.provider-badge.provider-codex {
+  background: rgba(42, 161, 152, 0.2);  /* Cyan with transparency */
+  color: var(--sol-cyan);
+}
+
+.gallery-card-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* State badge - unified indicator for running/looping/idle states */
+.state-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.state-badge .state-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.state-badge .state-label {
+  white-space: nowrap;
+}
+
+/* Idle state - muted */
+.state-badge.state-idle {
+  background: rgba(88, 110, 117, 0.2);  /* Base01 with transparency */
+  color: var(--text-secondary);
+}
+
+.state-badge.state-idle .state-indicator {
+  background: var(--text-muted);
+}
+
+/* Running state - cyan with pulse */
+.state-badge.state-running {
+  background: rgba(42, 161, 152, 0.2);  /* Cyan with transparency */
+  color: var(--sol-cyan);
+}
+
+.state-badge.state-running .state-indicator {
+  background: var(--sol-cyan);
+  animation: pulse 1.5s infinite;
+}
+
+/* Looping state - magenta with pulse */
+.state-badge.state-looping {
+  background: rgba(211, 54, 130, 0.2);  /* Magenta with transparency */
+  color: var(--sol-magenta);
+}
+
+.state-badge.state-looping .state-indicator {
+  background: var(--sol-magenta);
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.gallery-card-dir {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: monospace;
+  margin-bottom: 8px;
+}
+
+.gallery-messages {
+  max-height: 200px;
+  overflow-y: auto;
+  margin-top: 12px;
+}
+
+.gallery-message {
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  background: var(--bg-tertiary);
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.gallery-message.user {
+  background: var(--bg-user-message);
+  border-left: 3px solid var(--accent-user);
+}
+
+.gallery-message.assistant {
+  background: var(--bg-assistant-message);
+  border-left: 3px solid var(--accent-assistant);
+}

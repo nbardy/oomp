@@ -1,0 +1,127 @@
+/* =============================================================================
+   Solarized Dark Theme - CSS Custom Properties
+
+   This theme uses the Solarized Dark color palette by Ethan Schoonover.
+   All colors are defined as CSS variables for easy theme switching.
+
+   Base colors:
+   - base03/base02: Background tones
+   - base01/base00/base0/base1: Content tones (comments to emphasis)
+   - base2/base3: Light background tones (for light theme variant)
+
+   Accent colors:
+   - Yellow, Orange, Red, Magenta, Violet, Blue, Cyan, Green
+   ============================================================================= */
+
+:root {
+  /* Solarized Dark - Base Colors */
+  --sol-base03: #002b36;  /* Background */
+  --sol-base02: #073642;  /* Background highlights */
+  --sol-base01: #586e75;  /* Comments, secondary content */
+  --sol-base00: #657b83;  /* Body text (dark theme) */
+  --sol-base0: #839496;   /* Body text */
+  --sol-base1: #93a1a1;   /* Emphasized content */
+  --sol-base2: #eee8d5;   /* Background (light theme) */
+  --sol-base3: #fdf6e3;   /* Background highlights (light theme) */
+
+  /* Solarized Dark - Accent Colors */
+  --sol-yellow: #b58900;
+  --sol-orange: #cb4b16;
+  --sol-red: #dc322f;
+  --sol-magenta: #d33682;
+  --sol-violet: #6c71c4;
+  --sol-blue: #268bd2;
+  --sol-cyan: #2aa198;
+  --sol-green: #859900;
+
+  /* Semantic Color Mappings */
+  --bg-primary: var(--sol-base03);
+  --bg-secondary: var(--sol-base02);
+  --bg-tertiary: #094152;  /* Slightly lighter than base02 for layering */
+  --border-color: var(--sol-base01);
+  --border-subtle: #0a4a5c;  /* Subtle border between base02 and base01 */
+  --text-primary: var(--sol-base0);
+  --text-secondary: var(--sol-base01);
+  --text-emphasis: var(--sol-base1);
+  --text-muted: var(--sol-base00);
+
+  /* Interactive Elements */
+  --accent-primary: var(--sol-violet);
+  --accent-primary-hover: #7c81d4;  /* Lighter violet for hover */
+  --accent-user: var(--sol-green);
+  --accent-assistant: var(--sol-blue);
+  --accent-success: var(--sol-cyan);
+  --accent-warning: var(--sol-yellow);
+  --accent-error: var(--sol-red);
+  --accent-queue: var(--sol-blue);
+  --accent-loop: var(--sol-magenta);
+
+  /* Message backgrounds with subtle accent tints */
+  --bg-user-message: #073a32;     /* Base02 with green tint */
+  --bg-assistant-message: #073242; /* Base02 with blue tint */
+
+  /* Code styling */
+  --code-bg: var(--sol-base03);
+  --code-text: var(--sol-cyan);
+  --code-string: var(--sol-green);
+
+  /* Typography */
+  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+
+  color-scheme: dark;
+  color: var(--text-primary);
+  background-color: var(--bg-primary);
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+a {
+  font-weight: 500;
+  color: var(--sol-blue);
+  text-decoration: inherit;
+}
+
+a:hover {
+  color: var(--sol-cyan);
+}
+
+body {
+  margin: 0;
+  display: flex;
+  place-items: center;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+h1 {
+  font-size: 3.2em;
+  line-height: 1.1;
+}
+
+button {
+  border-radius: 8px;
+  border: 1px solid transparent;
+  padding: 0.6em 1.2em;
+  font-size: 1em;
+  font-weight: 500;
+  font-family: inherit;
+  background-color: var(--bg-secondary);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: border-color 0.25s, background-color 0.25s;
+}
+
+button:hover {
+  border-color: var(--accent-primary);
+}
+
+button:focus,
+button:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
