@@ -4,6 +4,7 @@ import { spawn, ChildProcess, execSync } from 'node:child_process';
 import { v4 as uuidv4 } from 'uuid';
 import path from 'node:path';
 import fs from 'node:fs';
+import os from 'node:os';
 import http from 'node:http';
 import net from 'node:net';
 import readline from 'node:readline';
@@ -786,6 +787,54 @@ wss.on('connection', (ws: WebSocket) => {
 // =============================================================================
 // Express Routes
 // =============================================================================
+
+// JSON body parser for API routes
+app.use(express.json());
+
+// Settings API - stored in ~/.agent-viewer/settings.json
+const SETTINGS_DIR = path.join(os.homedir(), '.agent-viewer');
+const SETTINGS_FILE = path.join(SETTINGS_DIR, 'settings.json');
+
+interface Settings {
+  colorPalette: string;
+}
+
+const DEFAULT_SETTINGS: Settings = {
+  colorPalette: 'solarized',
+};
+
+function loadSettings(): Settings {
+  try {
+    if (fs.existsSync(SETTINGS_FILE)) {
+      const data = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+      return { ...DEFAULT_SETTINGS, ...JSON.parse(data) };
+    }
+  } catch (e) {
+    console.error('Error loading settings:', e);
+  }
+  return DEFAULT_SETTINGS;
+}
+
+function saveSettings(settings: Settings): void {
+  try {
+    if (!fs.existsSync(SETTINGS_DIR)) {
+      fs.mkdirSync(SETTINGS_DIR, { recursive: true });
+    }
+    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
+  } catch (e) {
+    console.error('Error saving settings:', e);
+  }
+}
+
+app.get('/api/settings', (_req: Request, res: Response) => {
+  res.json(loadSettings());
+});
+
+app.post('/api/settings', (req: Request, res: Response) => {
+  const settings = { ...loadSettings(), ...req.body };
+  saveSettings(settings);
+  res.json(settings);
+});
 
 // Serve static files from client build
 const clientDist = path.join(__dirname, '../../client/dist');

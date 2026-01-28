@@ -1,0 +1,72 @@
+.config-dropdown {
+  position: relative;
+}
+
+.config-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  background: var(--color-surface, #073642);
+  border: 1px solid var(--color-border, #073642);
+  border-radius: 8px;
+  color: var(--color-text-muted, #586e75);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.config-trigger:hover {
+  background: var(--color-border, #073642);
+  color: var(--color-text, #839496);
+}
+
+.config-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 220px;
+  background: var(--color-surface, #073642);
+  border: 1px solid var(--color-border, #073642);
+  border-radius: 8px;
+  padding: 4px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  z-index: 1000;
+}
+
+.config-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--color-text, #839496);
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s;
+}
+
+.config-item:hover {
+  background: var(--color-background, #002b36);
+}
+
+.config-item-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-muted, #586e75);
+}
+
+.config-item-label {
+  flex: 1;
+  font-size: 14px;
+}
+
+.config-item-value {
+  font-size: 12px;
+  color: var(--color-text-muted, #586e75);
+  text-transform: capitalize;
+}

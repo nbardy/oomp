@@ -30,6 +30,14 @@ body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  position: relative;
+}
+
+.top-bar {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 100;
 }
 
 /* Scrollbar styling - Solarized Dark */

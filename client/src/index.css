@@ -14,7 +14,20 @@
    ============================================================================= */
 
 :root {
-  /* Solarized Dark - Base Colors */
+  /* Dynamic Theme Colors - Set by JavaScript via useSettings hook */
+  /* These will be overridden when a palette is selected */
+  --color-primary: #268bd2;
+  --color-secondary: #2aa198;
+  --color-accent: #b58900;
+  --color-background: #002b36;
+  --color-surface: #073642;
+  --color-text: #839496;
+  --color-text-muted: #586e75;
+  --color-border: #073642;
+  --color-user: #268bd2;
+  --color-assistant: #2aa198;
+
+  /* Solarized Dark - Base Colors (default fallbacks) */
   --sol-base03: #002b36;  /* Background */
   --sol-base02: #073642;  /* Background highlights */
   --sol-base01: #586e75;  /* Comments, secondary content */
@@ -34,26 +47,26 @@
   --sol-cyan: #2aa198;
   --sol-green: #859900;
 
-  /* Semantic Color Mappings */
-  --bg-primary: var(--sol-base03);
-  --bg-secondary: var(--sol-base02);
+  /* Semantic Color Mappings - Use dynamic theme colors */
+  --bg-primary: var(--color-background);
+  --bg-secondary: var(--color-surface);
   --bg-tertiary: #094152;  /* Slightly lighter than base02 for layering */
-  --border-color: var(--sol-base01);
+  --border-color: var(--color-border);
   --border-subtle: #0a4a5c;  /* Subtle border between base02 and base01 */
-  --text-primary: var(--sol-base0);
-  --text-secondary: var(--sol-base01);
+  --text-primary: var(--color-text);
+  --text-secondary: var(--color-text-muted);
   --text-emphasis: var(--sol-base1);
-  --text-muted: var(--sol-base00);
+  --text-muted: var(--color-text-muted);
 
-  /* Interactive Elements */
-  --accent-primary: var(--sol-violet);
+  /* Interactive Elements - Use dynamic theme colors */
+  --accent-primary: var(--color-primary);
   --accent-primary-hover: #7c81d4;  /* Lighter violet for hover */
-  --accent-user: var(--sol-green);
-  --accent-assistant: var(--sol-blue);
-  --accent-success: var(--sol-cyan);
-  --accent-warning: var(--sol-yellow);
+  --accent-user: var(--color-user);
+  --accent-assistant: var(--color-assistant);
+  --accent-success: var(--color-secondary);
+  --accent-warning: var(--color-accent);
   --accent-error: var(--sol-red);
-  --accent-queue: var(--sol-blue);
+  --accent-queue: var(--color-primary);
   --accent-loop: var(--sol-magenta);
 
   /* Message backgrounds with subtle accent tints */

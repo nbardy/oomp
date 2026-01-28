@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
 import { useFolderFilter } from '../hooks/useFolderFilter';
 import { FolderFilter } from './FolderFilter';
-import type { Conversation } from 'claude-web-view-shared';
+import type { Conversation, Message } from '@claude-web-view/shared';
 import './Gallery.css';
 
 // Viridis color palette - scientific visualization colormap
@@ -222,7 +222,7 @@ export function Gallery() {
                             {conv.messages.length === 0 ? (
                               <div className="empty-state">No messages yet</div>
                             ) : (
-                              conv.messages.slice(-3).map((msg, i) => (
+                              conv.messages.slice(-3).map((msg: Message, i: number) => (
                                 <div key={i} className={`gallery-message ${msg.role}`}>
                                   <strong>{msg.role}:</strong> {msg.content.substring(0, 100)}
                                   {msg.content.length > 100 ? '...' : ''}
