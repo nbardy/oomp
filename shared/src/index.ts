@@ -117,11 +117,42 @@ export {
 export const ProviderSchema = z.enum(['claude', 'codex']);
 export type Provider = z.infer<typeof ProviderSchema>;
 
+// =============================================================================
+// Model Identifiers — per-provider model choices
+//
+// Each provider defines a union of "model identifiers" that the UI presents
+// as a dropdown. These are opaque strings on the client side.
+// The server's Provider.modelToParams() decomposes them into CLI flags.
+//
+// Claude: aliases passed to `claude --model <alias>`
+// Codex: composite strings encoding model + effort level
+//   e.g. "gpt-5.2-high" → `-m gpt-5.2 -c model_reasoning_effort=high`
+// =============================================================================
+
+export const ClaudeModelSchema = z.enum(['opus', 'sonnet', 'haiku']);
+export type ClaudeModel = z.infer<typeof ClaudeModelSchema>;
+
+export const CodexModelSchema = z.enum(['gpt-5.2-medium', 'gpt-5.2-high', 'gpt-5.2-xhigh']);
+export type CodexModel = z.infer<typeof CodexModelSchema>;
+
+export const ModelIdSchema = z.union([ClaudeModelSchema, CodexModelSchema]);
+export type ModelId = z.infer<typeof ModelIdSchema>;
+
+/** Display metadata returned by Provider.listModels() for the model dropdown */
+export const ModelInfoSchema = z.object({
+  id: ModelIdSchema,
+  displayName: z.string(),
+  isDefault: z.boolean(),
+});
+export type ModelInfo = z.infer<typeof ModelInfoSchema>;
+
 export const MessageSchema = z.object({
   role: z.enum(['user', 'assistant', 'system']),
   content: z.string(),
   timestamp: z.coerce.date(),
   isLoopMarker: z.boolean().optional(),
+  loopIteration: z.number().int().positive().optional(),   // Which iteration (1-based) this msg belongs to
+  loopTotal: z.number().int().positive().optional(),        // Total iterations in the loop run
 });
 
 export type Message = z.infer<typeof MessageSchema>;
@@ -166,6 +197,7 @@ export const ConversationSchema = z.object({
   workingDirectory: z.string(),
   loopConfig: LoopConfigSchema.nullable().optional(),
   provider: ProviderSchema.default('claude'),
+  model: ModelIdSchema.optional(),  // Provider-specific model identifier (undefined = provider default)
   subAgents: z.array(SubAgentSchema).default([]),  // Active/recent sub-agents
 });
 
@@ -177,8 +209,10 @@ export type Conversation = z.infer<typeof ConversationSchema>;
 
 export const NewConversationMessageSchema = z.object({
   type: z.literal('new_conversation'),
+  id: z.string().uuid().optional(), // Client-generated UUID for optimistic insert
   workingDirectory: z.string().optional(),
   provider: ProviderSchema.optional(), // Defaults to 'claude' when not specified
+  model: ModelIdSchema.optional(),     // Provider-specific model (undefined = provider default)
 });
 
 export type NewConversationMessage = z.infer<typeof NewConversationMessageSchema>;
@@ -366,6 +400,14 @@ export const SubAgentCompleteMessageSchema = z.object({
 
 export type SubAgentCompleteMessage = z.infer<typeof SubAgentCompleteMessageSchema>;
 
+// File polling: server detected external changes to JSONL files
+export const ConversationsUpdatedMessageSchema = z.object({
+  type: z.literal('conversations_updated'),
+  conversations: z.array(ConversationSchema),
+});
+
+export type ConversationsUpdatedMessage = z.infer<typeof ConversationsUpdatedMessageSchema>;
+
 export const ServerMessageSchema = z.discriminatedUnion('type', [
   InitMessageSchema,
   ConversationCreatedMessageSchema,
@@ -382,6 +424,7 @@ export const ServerMessageSchema = z.discriminatedUnion('type', [
   SubAgentStartMessageSchema,
   SubAgentUpdateMessageSchema,
   SubAgentCompleteMessageSchema,
+  ConversationsUpdatedMessageSchema,
 ]);
 
 export type ServerMessage = z.infer<typeof ServerMessageSchema>;
@@ -429,3 +472,74 @@ export function isClientMessage(msg: unknown): msg is ClientMessage {
 export function isServerMessage(msg: unknown): msg is ServerMessage {
   return ServerMessageSchema.safeParse(msg).success;
 }
+
+// =============================================================================
+// JSONL Adapter Types (for persistence layer)
+// =============================================================================
+
+export {
+  // Content block types
+  JsonlTextBlockSchema,
+  JsonlThinkingBlockSchema,
+  JsonlToolUseBlockSchema,
+  JsonlToolResultBlockSchema,
+  JsonlContentBlockSchema,
+  type JsonlTextBlock,
+  type JsonlThinkingBlock,
+  type JsonlToolUseBlock,
+  type JsonlToolResultBlock,
+  type JsonlContentBlock,
+  // Entry types
+  JsonlUserEntrySchema,
+  JsonlAssistantEntrySchema,
+  JsonlProgressEntrySchema,
+  JsonlSystemEntrySchema,
+  JsonlFileHistorySnapshotEntrySchema,
+  JsonlQueueOperationEntrySchema,
+  JsonlEntrySchema,
+  type JsonlUserEntry,
+  type JsonlAssistantEntry,
+  type JsonlProgressEntry,
+  type JsonlSystemEntry,
+  type JsonlFileHistorySnapshotEntry,
+  type JsonlQueueOperationEntry,
+  type JsonlEntry,
+  type JsonlSession,
+  // Type guards
+  isJsonlUserEntry,
+  isJsonlAssistantEntry,
+  isJsonlTextBlock,
+  isJsonlThinkingBlock,
+  isJsonlToolUseBlock,
+  isJsonlToolResultBlock,
+} from './adapters/jsonl.types';
+
+// Codex Native Session Types (for reading ~/.codex/sessions/)
+export {
+  // Schemas
+  CodexSessionMetaSchema,
+  CodexResponseMessageSchema,
+  CodexFunctionCallSchema,
+  CodexFunctionCallOutputSchema,
+  CodexUserMessageEventSchema,
+  CodexAgentMessageEventSchema,
+  CodexTurnContextSchema,
+  CodexSessionEntrySchema,
+  // Types
+  type CodexSessionMeta,
+  type CodexResponseMessage,
+  type CodexFunctionCall,
+  type CodexFunctionCallOutput,
+  type CodexUserMessageEvent,
+  type CodexAgentMessageEvent,
+  type CodexTurnContext,
+  type CodexSessionEntry,
+  type CodexParsedSession,
+  // Type guards
+  isCodexSessionMeta,
+  isCodexResponseMessage,
+  isCodexFunctionCall,
+  isCodexFunctionCallOutput,
+  isCodexUserMessageEvent,
+  isCodexAgentMessageEvent,
+} from './adapters/codex-session.types';

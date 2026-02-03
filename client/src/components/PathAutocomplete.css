@@ -56,12 +56,9 @@
   }
 }
 
-/* Suggestions dropdown */
+/* Suggestions dropdown — flows in normal layout so parent containers
+   (e.g. the New Conversation modal) expand to fit, keeping buttons visible. */
 .path-suggestions {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  right: 0;
   margin-top: 4px;
   background: var(--bg-secondary);
   border: 1px solid var(--border-subtle);
@@ -96,8 +93,31 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--sol-yellow);
+  color: var(--yellow);
   flex-shrink: 0;
+}
+
+/* Recent/history icon (clock) */
+.path-recent-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent-primary);
+  flex-shrink: 0;
+}
+
+/* Fuzzy match character highlights */
+.path-suggestion-path mark {
+  background: none;
+  color: var(--accent-primary);
+  font-weight: 700;
+}
+
+/* Divider between recent matches and filesystem suggestions */
+.path-section-divider {
+  height: 1px;
+  background: var(--border-default);
+  margin: 2px 12px;
 }
 
 /* Directory name (bold) */

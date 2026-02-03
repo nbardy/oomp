@@ -13,11 +13,12 @@
 /* Gallery content container - scrollable area for all project sections */
 .gallery-content {
   flex: 1;
-  padding: 24px;
+  padding: 24px 32px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 32px;
+  background: var(--bg-content);  /* Tier 1 - content background */
 }
 
 /* =============================================================================
@@ -38,16 +39,18 @@
   justify-content: space-between;
   align-items: center;
   padding: 12px 16px;
-  background: var(--bg-tertiary);
+  background: var(--bg-panel);  /* Tier 3 */
   border-radius: 8px;
+  border-left: 4px solid var(--cyan);
   cursor: pointer;
   user-select: none;
   margin-bottom: 16px;
-  transition: background 0.2s;
+  transition: all 0.2s;
 }
 
 .project-header:hover {
-  background: var(--bg-secondary);
+  background: var(--bg-hover);  /* Tier 4 */
+  border-left-color: var(--cyan-bright);
 }
 
 .project-header-left {
@@ -71,17 +74,19 @@
 .project-path {
   font-family: monospace;
   font-size: 14px;
-  color: var(--text-primary);
+  color: var(--cyan-bright);
   font-weight: 500;
 }
 
 /* Conversation count badge */
 .project-count {
   font-size: 12px;
-  color: var(--text-secondary);
-  padding: 4px 10px;
-  background: var(--bg-primary);
+  color: var(--violet-bright);
+  padding: 4px 12px;
+  background: var(--violet-glow);
+  border: 1px solid color-mix(in srgb, var(--violet) 35%, transparent);
   border-radius: 12px;
+  font-weight: 500;
 }
 
 /* Grid layout for cards within a project */
@@ -130,7 +135,7 @@
 }
 
 .gallery-card {
-  background: var(--bg-secondary);
+  background: var(--bg-card);  /* Tier 2 */
   border-radius: 8px;
   padding: 20px;
   border: 1px solid var(--border-subtle);
@@ -140,9 +145,8 @@
 }
 
 .gallery-card:hover {
-  border-left-color: var(--accent-primary);
-  border-right-color: var(--accent-primary);
-  border-bottom-color: var(--accent-primary);
+  background: var(--bg-panel);  /* Tier 3 on hover */
+  border-color: var(--border-default);
   /* border-top-color is set by viridis inline style - preserved on hover */
   transform: translateY(-2px);
 }
@@ -175,13 +179,13 @@
 }
 
 .provider-badge.provider-claude {
-  background: rgba(108, 113, 196, 0.2);  /* Violet with transparency */
-  color: var(--sol-violet);
+  background: color-mix(in srgb, var(--violet) 20%, transparent);
+  color: var(--violet);
 }
 
 .provider-badge.provider-codex {
-  background: rgba(42, 161, 152, 0.2);  /* Cyan with transparency */
-  color: var(--sol-cyan);
+  background: color-mix(in srgb, var(--cyan) 20%, transparent);
+  color: var(--cyan);
 }
 
 .gallery-card-status {
@@ -213,7 +217,7 @@
 
 /* Idle state - muted */
 .state-badge.state-idle {
-  background: rgba(88, 110, 117, 0.2);  /* Base01 with transparency */
+  background: color-mix(in srgb, var(--text-muted) 20%, transparent);
   color: var(--text-secondary);
 }
 
@@ -223,23 +227,23 @@
 
 /* Running state - cyan with pulse */
 .state-badge.state-running {
-  background: rgba(42, 161, 152, 0.2);  /* Cyan with transparency */
-  color: var(--sol-cyan);
+  background: color-mix(in srgb, var(--cyan) 20%, transparent);
+  color: var(--cyan);
 }
 
 .state-badge.state-running .state-indicator {
-  background: var(--sol-cyan);
+  background: var(--cyan);
   animation: pulse 1.5s infinite;
 }
 
 /* Looping state - magenta with pulse */
 .state-badge.state-looping {
-  background: rgba(211, 54, 130, 0.2);  /* Magenta with transparency */
-  color: var(--sol-magenta);
+  background: color-mix(in srgb, var(--magenta) 20%, transparent);
+  color: var(--magenta);
 }
 
 .state-badge.state-looping .state-indicator {
-  background: var(--sol-magenta);
+  background: var(--magenta);
   animation: pulse 1.5s infinite;
 }
 
@@ -282,4 +286,124 @@
 .gallery-message.assistant {
   background: var(--bg-assistant-message);
   border-left: 3px solid var(--accent-assistant);
+}
+
+/* =============================================================================
+   Temporary Sessions Section - Hidden by default, toggle to show
+   ============================================================================= */
+
+.temp-sessions-section {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px dashed var(--border-subtle);
+}
+
+.temp-sessions-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 12px 16px;
+  background: transparent;
+  border: 1px dashed var(--border-subtle);
+  border-radius: 8px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.2s;
+  text-align: left;
+}
+
+.temp-sessions-toggle:hover {
+  background: var(--bg-tertiary);
+  border-color: var(--orange);
+  color: var(--text-primary);
+}
+
+.temp-sessions-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* Temp project sections have slightly different styling */
+.temp-project .project-header {
+  background: var(--bg-tertiary);
+  border: 1px dashed var(--border-subtle);
+  opacity: 0.85;
+}
+
+.temp-project .project-path {
+  color: var(--text-secondary);
+}
+
+/* =============================================================================
+   Done Conversations Section - Hidden by default, toggle to show/restore
+   ============================================================================= */
+
+.done-sessions-section {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px dashed var(--border-subtle);
+}
+
+.done-sessions-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 12px 16px;
+  background: transparent;
+  border: 1px dashed var(--border-subtle);
+  border-radius: 8px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.2s;
+  text-align: left;
+}
+
+.done-sessions-toggle:hover {
+  background: var(--bg-tertiary);
+  border-color: var(--green);
+  color: var(--text-primary);
+}
+
+/* Done project sections — slightly dimmed */
+.done-project .project-header {
+  background: var(--bg-tertiary);
+  border: 1px dashed var(--border-subtle);
+  border-left: 4px solid var(--green);
+  opacity: 0.85;
+}
+
+.done-project .project-path {
+  color: var(--text-secondary);
+}
+
+/* Done card — slightly dimmed */
+.gallery-card.done-card {
+  opacity: 0.75;
+}
+
+.gallery-card.done-card:hover {
+  opacity: 1;
+}
+
+/* Restore button on done cards */
+.undo-done-btn {
+  padding: 3px 10px;
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.undo-done-btn:hover {
+  background: color-mix(in srgb, var(--green) 20%, transparent);
+  border-color: var(--green);
+  color: var(--green);
 }

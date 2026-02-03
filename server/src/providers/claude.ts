@@ -19,6 +19,7 @@
  * WARNING: Only use in trusted/sandboxed environments with no internet access.
  */
 
+import type { ModelInfo } from '@claude-web-view/shared';
 import { ProviderParseError, type Provider, type SpawnConfig, type ProviderEvent } from './index';
 
 // =============================================================================
@@ -112,7 +113,21 @@ function isClaudeOutput(data: unknown): data is ClaudeOutput {
 const claudeProvider: Provider = {
   name: 'claude',
 
-  getSpawnConfig(sessionId: string, workingDir: string, resume = false): SpawnConfig {
+  listModels(): ModelInfo[] {
+    return [
+      { id: 'sonnet', displayName: 'Claude Sonnet', isDefault: true },
+      { id: 'opus', displayName: 'Claude Opus', isDefault: false },
+      { id: 'haiku', displayName: 'Claude Haiku', isDefault: false },
+    ];
+  },
+
+  modelToParams(modelId?: string): string[] {
+    if (!modelId) return [];
+    // Claude CLI accepts: claude --model <alias>
+    return ['--model', modelId];
+  },
+
+  getSpawnConfig(sessionId: string, workingDir: string, resume = false, modelId?: string): SpawnConfig {
     // Simple and reliable: one process per turn
     // -p (--print): Process one message then exit
     // --resume: Continue existing session for context
@@ -123,6 +138,7 @@ const claudeProvider: Provider = {
       '--verbose',
       '--output-format', 'stream-json',
       '--include-partial-messages',
+      ...this.modelToParams(modelId),
     ];
 
     // MAX PERMISSIONS MODE (enabled by default):
@@ -156,6 +172,15 @@ const claudeProvider: Provider = {
       options: {
         cwd: workingDir,
       },
+    };
+  },
+
+  getSingleShotConfig(prompt: string): SpawnConfig {
+    // Single-shot: one prompt as CLI arg, plain text output, no session
+    return {
+      command: 'claude',
+      args: ['-p', prompt, '--output-format', 'text'],
+      options: {},
     };
   },
 

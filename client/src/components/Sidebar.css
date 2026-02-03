@@ -4,25 +4,26 @@
 
 .sidebar {
   width: 280px;
-  background: var(--bg-secondary);
-  border-right: 1px solid var(--border-subtle);
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border-strong);
   display: flex;
   flex-direction: column;
 }
 
 .sidebar-header {
   padding: 20px;
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-emphasis);
   display: flex;
   flex-direction: column;
   gap: 8px;
+  background: rgba(0, 0, 0, 0.15);
 }
 
 .gallery-btn {
   width: 100%;
   padding: 10px 20px;
   background: var(--accent-primary);
-  color: #fff;
+  color: var(--text-on-accent);
   border: none;
   border-radius: 6px;
   cursor: pointer;
@@ -41,7 +42,7 @@
   width: 100%;
   padding: 12px 20px;
   background: var(--bg-tertiary);
-  color: #fff;
+  color: var(--text-emphasis);
   border: none;
   border-radius: 6px;
   cursor: pointer;
@@ -56,32 +57,82 @@
   background: var(--border-color);
 }
 
-.directory-picker {
-  margin-top: 12px;
+.shortcut-hint {
+  margin-left: auto;
+  font-size: 10px;
+  font-family: inherit;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--text-muted);
+  line-height: 1;
 }
 
-.directory-input {
+/* New Conversation Modal — centered popup overlay */
+.new-conv-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+}
+
+.new-conv-modal {
+  width: 480px;
+  max-width: 90vw;
+  max-height: 80vh;
+  overflow-y: auto;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  padding: 28px 32px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.new-conv-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-emphasis);
+  margin-bottom: 8px;
+}
+
+.new-conv-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-top: 4px;
+}
+
+.new-conv-modal .directory-input {
   width: 100%;
-  padding: 8px 12px;
+  padding: 10px 14px;
   background: var(--bg-primary);
   border: 1px solid var(--border-subtle);
-  border-radius: 4px;
+  border-radius: 6px;
   color: var(--text-emphasis);
-  font-size: 12px;
+  font-size: 13px;
   font-family: monospace;
-  margin-bottom: 8px;
   box-sizing: border-box;
 }
 
-.directory-input:focus {
+.new-conv-modal .directory-input:focus {
   outline: none;
   border-color: var(--accent-primary);
 }
 
-.provider-selector {
+.new-conv-modal .provider-selector {
   display: flex;
-  gap: 8px;
-  margin-bottom: 8px;
+  gap: 10px;
+  margin-bottom: 4px;
 }
 
 .provider-option {
@@ -90,12 +141,12 @@
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 8px 12px;
+  padding: 10px 14px;
   background: var(--bg-tertiary);
   border: 1px solid var(--border-subtle);
-  border-radius: 4px;
+  border-radius: 6px;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 13px;
   cursor: pointer;
   transition: all 0.2s;
 }
@@ -108,30 +159,87 @@
 .provider-option.selected {
   background: var(--bg-tertiary);
   border-color: var(--accent-primary);
-  color: #fff;
+  color: var(--text-emphasis);
 }
 
 .provider-option input[type="radio"] {
   display: none;
 }
 
-.directory-actions {
+.new-conv-modal .model-selector {
   display: flex;
   gap: 8px;
+  margin-bottom: 4px;
+  flex-wrap: wrap;
+}
+
+.model-option {
+  flex: 1;
+  min-width: 100px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.model-option:hover {
+  background: var(--border-color);
+  color: var(--text-primary);
+}
+
+.model-option.selected {
+  background: var(--bg-tertiary);
+  border-color: var(--accent-primary);
+  color: var(--text-emphasis);
+}
+
+.model-option input[type="radio"] {
+  display: none;
+}
+
+.new-conv-modal .directory-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
 }
 
 .dir-action-btn {
   flex: 1;
-  padding: 6px 12px;
+  padding: 10px 16px;
   border: none;
-  border-radius: 4px;
+  border-radius: 6px;
   cursor: pointer;
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 500;
+  transition: background 0.2s;
 }
 
 .dir-confirm-btn {
   background: var(--accent-success);
-  color: white;
+  color: var(--text-on-accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.btn-shortcut {
+  font-size: 10px;
+  font-family: system-ui, sans-serif;
+  opacity: 0.7;
+  padding: 1px 4px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.1);
+  line-height: 1.2;
 }
 
 .dir-confirm-btn:disabled {
@@ -142,7 +250,7 @@
 
 .dir-cancel-btn {
   background: var(--bg-tertiary);
-  color: white;
+  color: var(--text-emphasis);
 }
 
 .dir-cancel-btn:hover {
@@ -166,40 +274,83 @@
 }
 
 .status-dot.connected {
-  background: var(--sol-cyan);
+  background: var(--accent-success);
 }
 
 .status-dot.connecting {
-  background: var(--sol-yellow);
+  background: var(--accent-warning);
 }
 
 .status-dot.disconnected {
-  background: var(--sol-red);
+  background: var(--accent-error);
 }
 
 .conversations-list {
   flex: 1;
-  overflow-y: auto;
+  overflow-y: overlay; /* Float over content, no reserved gutter */
   padding: 10px;
+
+  /* Floating scrollbar: hidden until hover/scroll, no track background */
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  scrollbar-gutter: auto; /* No reserved space — scrollbar overlaps content */
 }
 
+.conversations-list:hover {
+  scrollbar-color: color-mix(in srgb, var(--text-emphasis) 30%, transparent) transparent;
+}
+
+/* WebKit (Chrome/Safari) — overlay scrollbar with no track */
+.conversations-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.conversations-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.conversations-list::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 3px;
+}
+
+.conversations-list:hover::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--text-emphasis) 30%, transparent);
+}
+
+.conversations-list::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--text-emphasis) 50%, transparent);
+}
+
+/* Conversation item — left border colored per-project via inline style.
+   Active state uses a background glow OUTSIDE the card (box-shadow) instead
+   of a thick purple border, so the card shape stays consistent. */
 .conversation-item {
   padding: 12px 16px;
   margin-bottom: 6px;
-  background: var(--bg-tertiary);
+  background: var(--bg-card);  /* Tier 2 - stands out from sidebar */
   border-radius: 6px;
   cursor: pointer;
-  transition: background 0.2s;
+  transition: all 0.2s;
   position: relative;
+  border: 1px solid var(--border-subtle);
+  border-left: 3px solid transparent; /* colored via inline style */
 }
 
 .conversation-item:hover {
-  background: var(--border-subtle);
+  background: var(--bg-panel);  /* Tier 3 on hover */
+  border-top-color: var(--border-default);
+  border-right-color: var(--border-default);
+  border-bottom-color: var(--border-default);
+  /* border-left-color preserved from inline style */
 }
 
+/* Active selection: soft glow fill behind the card, no purple left border */
 .conversation-item.active {
-  background: var(--border-color);
-  border-left: 3px solid var(--accent-primary);
+  background: var(--bg-hover);  /* Tier 4 when active */
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--accent-primary) 40%, transparent),
+    0 0 12px color-mix(in srgb, var(--accent-primary) 20%, transparent);
 }
 
 .conversation-header {
@@ -209,10 +360,18 @@
   margin-bottom: 4px;
 }
 
-.conversation-id {
-  font-size: 12px;
-  color: var(--text-secondary);
+/* Folder badge — top-left of each conversation item.
+   Background + text color set via inline style from getProjectColor(). */
+.folder-badge {
+  font-size: 11px;
   font-family: monospace;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 140px;
 }
 
 .status-indicator {
@@ -223,7 +382,7 @@
 }
 
 .status-indicator.running {
-  background: var(--sol-cyan);
+  background: var(--accent-success);
   animation: pulse 1.5s infinite;
 }
 
@@ -239,42 +398,66 @@
 
 .conversation-preview {
   font-size: 13px;
-  color: var(--text-secondary);
+  color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.conversation-dir {
-  font-size: 11px;
+.conversation-header-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.conversation-time-ago {
+  font-size: 10px;
   color: var(--text-muted);
-  margin-top: 4px;
-  font-family: monospace;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
-.delete-btn {
+/* NEW Badge Feature: Small pill badge to indicate unread messages.
+ * Appears when lastSeenIndex < messages.length - 1 (user hasn't seen latest messages).
+ * Positioned between folder badge and time-ago in conversation header.
+ * See docs/new_badge_feature.md for full design rationale. */
+.new-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 8px;
+  background: var(--accent-bright);
+  color: var(--bg-elevated);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  transition: opacity 200ms ease-in-out;
+  margin-right: 8px;
+}
+
+/* conversation-dir removed — folder is now shown as top-left badge */
+
+.done-btn {
   position: absolute;
   right: 8px;
   top: 50%;
   transform: translateY(-50%);
   padding: 4px 8px;
-  background: var(--accent-error);
-  color: white;
-  border: none;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-subtle);
   border-radius: 4px;
   font-size: 11px;
   cursor: pointer;
   opacity: 0;
-  transition: opacity 0.2s;
+  transition: opacity 0.2s, background 0.2s;
 }
 
-.conversation-item:hover .delete-btn {
+.conversation-item:hover .done-btn {
   opacity: 1;
 }
 
-.delete-btn:hover {
-  background: #c9302c;  /* Darker red */
+.done-btn:hover {
+  background: color-mix(in srgb, var(--green) 20%, transparent);
+  border-color: var(--green);
+  color: var(--green);
 }

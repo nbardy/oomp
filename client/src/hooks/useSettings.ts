@@ -1,128 +1,114 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 
-// Color palette definition
-export interface ColorPalette {
+/**
+ * 16-token palette. The only source of truth for a theme.
+ * CSS derives all other tokens (~60+) from these 14 values via color-mix().
+ *
+ * Naming follows Solarized convention:
+ *   base03 = darkest background, base02 = surface bg,
+ *   base01 = muted text, base00 = secondary text,
+ *   base0 = primary text, base1 = emphasis text,
+ *   + 8 accent colors
+ */
+export interface Palette16 {
   name: string;
-  colors: {
-    primary: string;
-    secondary: string;
-    accent: string;
-    background: string;
-    surface: string;
-    text: string;
-    textMuted: string;
-    border: string;
-    user: string;
-    assistant: string;
-  };
+  base03: string;
+  base02: string;
+  base01: string;
+  base00: string;
+  base0:  string;
+  base1:  string;
+  yellow:  string;
+  orange:  string;
+  red:     string;
+  magenta: string;
+  violet:  string;
+  blue:    string;
+  cyan:    string;
+  green:   string;
 }
 
-// Built-in palettes
-export const PALETTES: Record<string, ColorPalette> = {
+// Built-in palettes mapped to Palette16 format
+export const PALETTES: Record<string, Palette16> = {
   solarized: {
     name: 'Solarized Dark',
-    colors: {
-      primary: '#268bd2',
-      secondary: '#2aa198',
-      accent: '#b58900',
-      background: '#002b36',
-      surface: '#073642',
-      text: '#839496',
-      textMuted: '#586e75',
-      border: '#073642',
-      user: '#268bd2',
-      assistant: '#2aa198',
-    },
+    base03: '#002b36', base02: '#073642',
+    base01: '#586e75', base00: '#657b83',
+    base0:  '#839496', base1:  '#93a1a1',
+    yellow: '#b58900', orange: '#cb4b16',
+    red:    '#dc322f', magenta:'#d33682',
+    violet: '#6c71c4', blue:   '#268bd2',
+    cyan:   '#2aa198', green:  '#859900',
+  },
+  oksolar: {
+    name: 'OKSolar Dark',
+    base03: '#002d38', base02: '#093946',
+    base01: '#5b7279', base00: '#657377',
+    base0:  '#98a8a8', base1:  '#8faaab',
+    yellow: '#ac8300', orange: '#d56500',
+    red:    '#f23749', magenta:'#dd459d',
+    violet: '#7d80d1', blue:   '#2b90d8',
+    cyan:   '#259d94', green:  '#819500',
   },
   nord: {
     name: 'Nord',
-    colors: {
-      primary: '#88c0d0',
-      secondary: '#81a1c1',
-      accent: '#ebcb8b',
-      background: '#2e3440',
-      surface: '#3b4252',
-      text: '#eceff4',
-      textMuted: '#d8dee9',
-      border: '#4c566a',
-      user: '#88c0d0',
-      assistant: '#a3be8c',
-    },
+    base03: '#2e3440', base02: '#3b4252',
+    base01: '#4c566a', base00: '#d8dee9',
+    base0:  '#e5e9f0', base1:  '#eceff4',
+    yellow: '#ebcb8b', orange: '#d08770',
+    red:    '#bf616a', magenta:'#b48ead',
+    violet: '#5e81ac', blue:   '#81a1c1',
+    cyan:   '#88c0d0', green:  '#a3be8c',
   },
   dracula: {
     name: 'Dracula',
-    colors: {
-      primary: '#bd93f9',
-      secondary: '#ff79c6',
-      accent: '#ffb86c',
-      background: '#282a36',
-      surface: '#44475a',
-      text: '#f8f8f2',
-      textMuted: '#6272a4',
-      border: '#44475a',
-      user: '#8be9fd',
-      assistant: '#50fa7b',
-    },
+    base03: '#282a36', base02: '#44475a',
+    base01: '#6272a4', base00: '#bfbfbf',
+    base0:  '#f8f8f2', base1:  '#ffffff',
+    yellow: '#f1fa8c', orange: '#ffb86c',
+    red:    '#ff5555', magenta:'#ff79c6',
+    violet: '#bd93f9', blue:   '#8be9fd',
+    cyan:   '#8be9fd', green:  '#50fa7b',
   },
   monokai: {
     name: 'Monokai',
-    colors: {
-      primary: '#66d9ef',
-      secondary: '#a6e22e',
-      accent: '#f92672',
-      background: '#272822',
-      surface: '#3e3d32',
-      text: '#f8f8f2',
-      textMuted: '#75715e',
-      border: '#49483e',
-      user: '#66d9ef',
-      assistant: '#a6e22e',
-    },
+    base03: '#272822', base02: '#3e3d32',
+    base01: '#75715e', base00: '#a6a086',
+    base0:  '#f8f8f2', base1:  '#f8f8f0',
+    yellow: '#e6db74', orange: '#fd971f',
+    red:    '#f92672', magenta:'#f92672',
+    violet: '#ae81ff', blue:   '#66d9ef',
+    cyan:   '#66d9ef', green:  '#a6e22e',
   },
   gruvbox: {
     name: 'Gruvbox Dark',
-    colors: {
-      primary: '#83a598',
-      secondary: '#8ec07c',
-      accent: '#fabd2f',
-      background: '#282828',
-      surface: '#3c3836',
-      text: '#ebdbb2',
-      textMuted: '#a89984',
-      border: '#504945',
-      user: '#83a598',
-      assistant: '#b8bb26',
-    },
+    base03: '#282828', base02: '#3c3836',
+    base01: '#504945', base00: '#a89984',
+    base0:  '#ebdbb2', base1:  '#fbf1c7',
+    yellow: '#fabd2f', orange: '#fe8019',
+    red:    '#fb4934', magenta:'#d3869b',
+    violet: '#d3869b', blue:   '#83a598',
+    cyan:   '#8ec07c', green:  '#b8bb26',
   },
   tokyo: {
     name: 'Tokyo Night',
-    colors: {
-      primary: '#7aa2f7',
-      secondary: '#bb9af7',
-      accent: '#e0af68',
-      background: '#1a1b26',
-      surface: '#24283b',
-      text: '#c0caf5',
-      textMuted: '#565f89',
-      border: '#414868',
-      user: '#7aa2f7',
-      assistant: '#9ece6a',
-    },
+    base03: '#1a1b26', base02: '#24283b',
+    base01: '#414868', base00: '#565f89',
+    base0:  '#a9b1d6', base1:  '#c0caf5',
+    yellow: '#e0af68', orange: '#ff9e64',
+    red:    '#f7768e', magenta:'#bb9af7',
+    violet: '#7aa2f7', blue:   '#7dcfff',
+    cyan:   '#7dcfff', green:  '#9ece6a',
   },
   catppuccin: {
     name: 'Catppuccin Mocha',
-    colors: {
-      primary: '#89b4fa',
-      secondary: '#cba6f7',
-      accent: '#f9e2af',
-      background: '#1e1e2e',
-      surface: '#313244',
-      text: '#cdd6f4',
-      textMuted: '#6c7086',
-      border: '#45475a',
-      user: '#89b4fa',
-      assistant: '#a6e3a1',
-    },
+    base03: '#1e1e2e', base02: '#313244',
+    base01: '#45475a', base00: '#6c7086',
+    base0:  '#cdd6f4', base1:  '#bac2de',
+    yellow: '#f9e2af', orange: '#fab387',
+    red:    '#f38ba8', magenta:'#cba6f7',
+    violet: '#89b4fa', blue:   '#89dceb',
+    cyan:   '#94e2d5', green:  '#a6e3a1',
   },
 };
 
@@ -134,53 +120,64 @@ const DEFAULT_SETTINGS: Settings = {
   colorPalette: 'solarized',
 };
 
-// Apply palette to CSS variables
-export function applyPalette(palette: ColorPalette) {
+/**
+ * Apply a Palette16 to CSS by setting 14 --pal-* custom properties.
+ * CSS color-mix() rules derive the remaining ~60 tokens automatically.
+ */
+const PALETTE_KEYS = [
+  'base03', 'base02', 'base01', 'base00', 'base0', 'base1',
+  'yellow', 'orange', 'red', 'magenta', 'violet', 'blue', 'cyan', 'green',
+] as const;
+
+export function applyPalette(palette: Palette16) {
   const root = document.documentElement;
-  root.style.setProperty('--color-primary', palette.colors.primary);
-  root.style.setProperty('--color-secondary', palette.colors.secondary);
-  root.style.setProperty('--color-accent', palette.colors.accent);
-  root.style.setProperty('--color-background', palette.colors.background);
-  root.style.setProperty('--color-surface', palette.colors.surface);
-  root.style.setProperty('--color-text', palette.colors.text);
-  root.style.setProperty('--color-text-muted', palette.colors.textMuted);
-  root.style.setProperty('--color-border', palette.colors.border);
-  root.style.setProperty('--color-user', palette.colors.user);
-  root.style.setProperty('--color-assistant', palette.colors.assistant);
+  for (const key of PALETTE_KEYS) {
+    root.style.setProperty(`--pal-${key}`, palette[key]);
+  }
 }
 
 export function useSettings() {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [loaded, setLoaded] = useState(false);
+  const [customPalettes, setCustomPalettes] = useState<Record<string, Palette16>>({});
 
-  // Load settings from server on mount
+  // Single merged palette map -- computed once, stable reference until customPalettes changes
+  const allPalettes = useMemo<Record<string, Palette16>>(
+    () => ({ ...PALETTES, ...customPalettes }),
+    [customPalettes]
+  );
+
+  // Load settings and custom palettes from server on mount
   useEffect(() => {
-    fetch('/api/settings')
-      .then((res) => res.json())
-      .then((data) => {
-        if (data && data.colorPalette) {
-          setSettings(data);
+    Promise.all([
+      fetch('/api/settings').then((res) => res.json()),
+      fetch('/api/custom-palettes').then((res) => res.json()),
+    ])
+      .then(([settingsData, palettesData]) => {
+        if (settingsData && settingsData.colorPalette) {
+          setSettings(settingsData);
+        }
+        if (palettesData && typeof palettesData === 'object') {
+          setCustomPalettes(palettesData as Record<string, Palette16>);
         }
         setLoaded(true);
       })
       .catch(() => {
-        // Settings endpoint might not exist, use defaults
         setLoaded(true);
       });
   }, []);
 
-  // Apply palette when settings change
+  // Apply palette when settings or palette registry changes
   useEffect(() => {
     if (loaded) {
-      const palette = PALETTES[settings.colorPalette] || PALETTES.solarized;
+      const palette = allPalettes[settings.colorPalette] || PALETTES.solarized;
       applyPalette(palette);
     }
-  }, [settings.colorPalette, loaded]);
+  }, [settings.colorPalette, loaded, allPalettes]);
 
   const updateSettings = useCallback((newSettings: Partial<Settings>) => {
     setSettings((prev) => {
       const updated = { ...prev, ...newSettings };
-      // Save to server
       fetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -197,25 +194,32 @@ export function useSettings() {
     [updateSettings]
   );
 
-  // Preview a palette without saving
+  // Optimistically add a newly generated custom palette without re-fetching
+  const addCustomPalette = useCallback((key: string, palette: Palette16) => {
+    setCustomPalettes((prev) => ({ ...prev, [key]: palette }));
+  }, []);
+
+  // Preview a palette without saving -- uses allPalettes via closure
   const previewPalette = useCallback((paletteKey: string) => {
-    const palette = PALETTES[paletteKey];
+    const palette = allPalettes[paletteKey];
     if (palette) {
       applyPalette(palette);
     }
-  }, []);
+  }, [allPalettes]);
 
   // Restore current saved palette (after preview)
   const restorePalette = useCallback(() => {
-    const palette = PALETTES[settings.colorPalette] || PALETTES.solarized;
+    const palette = allPalettes[settings.colorPalette] || PALETTES.solarized;
     applyPalette(palette);
-  }, [settings.colorPalette]);
+  }, [settings.colorPalette, allPalettes]);
 
   return {
     settings,
     setColorPalette,
     previewPalette,
     restorePalette,
+    addCustomPalette,
+    allPalettes,
     loaded,
   };
 }

@@ -1,0 +1,75 @@
+/* =============================================================================
+   FilePreview.css — Inline file path preview with CSS-only hover popup
+   ============================================================================= */
+
+.file-preview {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.file-preview-icon {
+  font-size: 0.9em;
+  line-height: 1;
+}
+
+.file-preview-link {
+  color: var(--cyan);
+  text-decoration: underline;
+  font-family: "Monaco", "Menlo", "Consolas", monospace;
+  font-size: 0.9em;
+}
+
+.file-preview-link:hover {
+  color: var(--cyan-bright);
+}
+
+/* Popup — always in DOM, toggled via CSS :hover */
+.file-preview-popup {
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-emphasis);
+  border-radius: 8px;
+  padding: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  z-index: 200;
+  pointer-events: none;
+}
+
+.file-preview:hover .file-preview-popup {
+  display: flex;
+}
+
+.file-preview-image,
+.file-preview-video {
+  max-width: 60vw;
+  max-height: 60vh;
+  object-fit: contain;
+  border-radius: 4px;
+}
+
+.file-preview-iframe {
+  width: 60vw;
+  height: 50vh;
+  border: none;
+  border-radius: 4px;
+  background: white;
+}
+
+.file-preview-path {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: "Monaco", "Menlo", "Consolas", monospace;
+  max-width: 60vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

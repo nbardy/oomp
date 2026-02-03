@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { fuzzyMatch, highlightMatches } from '../utils/fuzzyMatch';
 import './PathAutocomplete.css';
 
 interface PathEntry {
@@ -7,11 +8,29 @@ interface PathEntry {
   isDirectory: boolean;
 }
 
+/** A recent directory matched via fuzzy search, with highlight info. */
+interface FuzzyDirMatch {
+  path: string;
+  name: string;
+  score: number;
+  /** Indices into the display path (~/...) that matched, for highlighting. */
+  matches: number[];
+}
+
 interface Props {
   value: string;
   onChange: (value: string) => void;
+  /** Deduplicated working directories from open conversations. */
+  recentDirectories?: string[];
   placeholder?: string;
   className?: string;
+  /** When true, the next keystroke clears the input and starts fresh instead of appending. */
+  hasPendingDefault?: boolean;
+  onClearDefault?: () => void;
+  /** Called on Shift+Enter to confirm the current value. */
+  onConfirm?: () => void;
+  /** Auto-focus the input on mount. */
+  autoFocus?: boolean;
 }
 
 /**
@@ -27,10 +46,15 @@ interface Props {
 export function PathAutocomplete({
   value,
   onChange,
+  recentDirectories = [],
   placeholder = '/path/to/directory',
   className = '',
+  hasPendingDefault = false,
+  onClearDefault,
+  onConfirm,
+  autoFocus = false,
 }: Props) {
-  const [suggestions, setSuggestions] = useState<PathEntry[]>([]);
+  const [fsSuggestions, setFsSuggestions] = useState<PathEntry[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
@@ -38,38 +62,82 @@ export function PathAutocomplete({
   const containerRef = useRef<HTMLDivElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Fetch suggestions from the server
-  const fetchSuggestions = useCallback(async (path: string) => {
+  // Auto-focus and select all text on mount when autoFocus is true
+  useEffect(() => {
+    if (autoFocus && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [autoFocus]);
+
+  // Fuzzy match recent directories against the current query.
+  // Runs synchronously on every render (cheap — typically <20 items).
+  const fuzzyMatches: FuzzyDirMatch[] = useMemo(() => {
+    const query = value.trim();
+    if (query.length === 0) {
+      // No query: show all recent directories (no filtering needed)
+      return recentDirectories.map((dir) => {
+        const name = dir.split('/').filter(Boolean).pop() ?? dir;
+        return { path: dir, name, score: 0, matches: [] };
+      });
+    }
+    const results: FuzzyDirMatch[] = [];
+    for (const dir of recentDirectories) {
+      // Match against the full path — users may type partial folder names anywhere in the path
+      const result = fuzzyMatch(query, dir);
+      if (result) {
+        const name = dir.split('/').filter(Boolean).pop() ?? dir;
+        results.push({ path: dir, name, score: result.score, matches: result.matches });
+      }
+    }
+    results.sort((a, b) => b.score - a.score);
+    return results;
+  }, [value, recentDirectories]);
+
+  // Determine if the input looks like a filesystem path (starts with / or ~).
+  // Non-path queries like "webviewe" skip the filesystem fetch entirely.
+  const looksLikePath = value.startsWith('/') || value.startsWith('~');
+
+  // Combined suggestion count for keyboard navigation
+  const totalCount = fuzzyMatches.length + fsSuggestions.length;
+
+  // Fetch filesystem suggestions from the server
+  const fetchFsSuggestions = useCallback(async (path: string) => {
     setIsLoading(true);
     try {
       const response = await fetch(`/api/paths?path=${encodeURIComponent(path)}`);
       if (response.ok) {
         const data = (await response.json()) as PathEntry[];
-        setSuggestions(data);
+        setFsSuggestions(data);
         setSelectedIndex(0);
       } else {
-        setSuggestions([]);
+        setFsSuggestions([]);
       }
     } catch {
-      setSuggestions([]);
+      setFsSuggestions([]);
     } finally {
       setIsLoading(false);
     }
   }, []);
 
-  // Debounced fetch when value changes
+  // Debounced fetch when value changes.
+  // Skip filesystem fetch for non-path queries (e.g. "webviewe") — only fuzzy matches apply.
   useEffect(() => {
     if (debounceRef.current) {
       clearTimeout(debounceRef.current);
     }
 
+    const trimmed = value.trim();
+    const isPath = trimmed.length === 0 || trimmed.startsWith('/') || trimmed.startsWith('~');
+
+    if (!isPath) {
+      // Non-path query: clear filesystem suggestions, rely solely on fuzzy matches
+      setFsSuggestions([]);
+      return;
+    }
+
     debounceRef.current = setTimeout(() => {
-      if (value) {
-        fetchSuggestions(value);
-      } else {
-        // Fetch home directory contents when empty
-        fetchSuggestions('');
-      }
+      fetchFsSuggestions(value);
     }, 150);
 
     return () => {
@@ -77,9 +145,12 @@ export function PathAutocomplete({
         clearTimeout(debounceRef.current);
       }
     };
-  }, [value, fetchSuggestions]);
+  }, [value, fetchFsSuggestions]);
 
-  // Close suggestions when clicking outside
+  // Close suggestions when clicking outside.
+  // Uses 'click' (not 'mousedown') so that when the dropdown is in normal flow,
+  // collapsing it doesn't shift sibling elements (e.g. a Create button) between
+  // mousedown and mouseup, which would cause the click to miss the button.
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
@@ -87,36 +158,65 @@ export function PathAutocomplete({
       }
     };
 
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    document.addEventListener('click', handleClickOutside);
+    return () => document.removeEventListener('click', handleClickOutside);
   }, []);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (hasPendingDefault) {
+      // First keystroke: clear the pre-filled default, start fresh with just the typed character.
+      // inputType='insertText' means a character was typed (not backspace/delete/paste).
+      const nativeEvent = e.nativeEvent as InputEvent;
+      if (nativeEvent.inputType === 'insertText' && nativeEvent.data) {
+        onChange(nativeEvent.data);
+        onClearDefault?.();
+        setShowSuggestions(true);
+        return;
+      }
+      onClearDefault?.();
+    }
     onChange(e.target.value);
     setShowSuggestions(true);
   };
 
   const handleInputFocus = () => {
     setShowSuggestions(true);
-    // Fetch suggestions on focus if we don't have any
-    if (suggestions.length === 0) {
-      fetchSuggestions(value);
+    // Select all text when there's a pending default so user can see what will be replaced
+    if (hasPendingDefault) {
+      inputRef.current?.select();
+    }
+    // Fetch filesystem suggestions on focus if we don't have any
+    if (fsSuggestions.length === 0 && looksLikePath) {
+      fetchFsSuggestions(value);
     }
   };
 
-  const handleSelectSuggestion = (suggestion: PathEntry) => {
-    // Append a trailing slash to indicate it's a directory
-    const newValue = suggestion.path.endsWith('/') ? suggestion.path : `${suggestion.path}/`;
+  const handleSelectPath = (path: string) => {
+    const newValue = path.endsWith('/') ? path : `${path}/`;
     onChange(newValue);
     setShowSuggestions(false);
     inputRef.current?.focus();
     // Immediately fetch contents of the selected directory
-    fetchSuggestions(newValue);
+    fetchFsSuggestions(newValue);
+  };
+
+  /** Resolve the selected index to a path from the combined list (fuzzy first, then fs). */
+  const getSelectedPath = (index: number): string | null => {
+    if (index < fuzzyMatches.length) return fuzzyMatches[index].path;
+    const fsIndex = index - fuzzyMatches.length;
+    if (fsIndex < fsSuggestions.length) return fsSuggestions[fsIndex].path;
+    return null;
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (!showSuggestions || suggestions.length === 0) {
-      // Still allow escape to close empty dropdown
+    // Shift+Enter always confirms, regardless of dropdown state
+    if (e.key === 'Enter' && e.shiftKey) {
+      e.preventDefault();
+      onConfirm?.();
+      return;
+    }
+
+    if (!showSuggestions || totalCount === 0) {
       if (e.key === 'Escape') {
         setShowSuggestions(false);
       }
@@ -126,39 +226,40 @@ export function PathAutocomplete({
     switch (e.key) {
       case 'ArrowDown':
         e.preventDefault();
-        setSelectedIndex((i) => Math.min(i + 1, suggestions.length - 1));
+        setSelectedIndex((i) => Math.min(i + 1, totalCount - 1));
         break;
       case 'ArrowUp':
         e.preventDefault();
         setSelectedIndex((i) => Math.max(i - 1, 0));
         break;
-      case 'Enter':
+      case 'Enter': {
         e.preventDefault();
-        if (suggestions[selectedIndex]) {
-          handleSelectSuggestion(suggestions[selectedIndex]);
-        }
+        const path = getSelectedPath(selectedIndex);
+        if (path) handleSelectPath(path);
         break;
+      }
       case 'Escape':
         e.preventDefault();
         setShowSuggestions(false);
         break;
-      case 'Tab':
-        // Tab completes the current selection
-        if (suggestions[selectedIndex]) {
+      case 'Tab': {
+        const path = getSelectedPath(selectedIndex);
+        if (path) {
           e.preventDefault();
-          handleSelectSuggestion(suggestions[selectedIndex]);
+          handleSelectPath(path);
         }
         break;
+      }
     }
   };
 
   // Scroll selected item into view
   useEffect(() => {
-    if (showSuggestions && suggestions.length > 0) {
+    if (showSuggestions && totalCount > 0) {
       const selectedElement = document.querySelector('.path-suggestion-item.selected');
       selectedElement?.scrollIntoView({ block: 'nearest' });
     }
-  }, [selectedIndex, showSuggestions, suggestions.length]);
+  }, [selectedIndex, showSuggestions, totalCount]);
 
   return (
     <div className={`path-autocomplete ${className}`} ref={containerRef}>
@@ -178,37 +279,63 @@ export function PathAutocomplete({
         {isLoading && <span className="path-loading-indicator" />}
       </div>
 
-      {showSuggestions && suggestions.length > 0 && (
+      {showSuggestions && totalCount > 0 && (
         <div className="path-suggestions">
-          {suggestions.map((suggestion, index) => (
-            <div
-              key={suggestion.path}
-              className={`path-suggestion-item ${index === selectedIndex ? 'selected' : ''}`}
-              onClick={() => handleSelectSuggestion(suggestion)}
-              onMouseEnter={() => setSelectedIndex(index)}
-            >
-              <span className="path-folder-icon">
-                <svg
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-                </svg>
-              </span>
-              <span className="path-suggestion-name">{suggestion.name}</span>
-              <span className="path-suggestion-path">{suggestion.path}</span>
-            </div>
-          ))}
+          {/* Recent directory fuzzy matches */}
+          {fuzzyMatches.map((match, index) => {
+            const parts = highlightMatches(match.path, match.matches);
+            return (
+              <div
+                key={`recent:${match.path}`}
+                className={`path-suggestion-item ${index === selectedIndex ? 'selected' : ''}`}
+                onClick={() => handleSelectPath(match.path)}
+                onMouseEnter={() => setSelectedIndex(index)}
+              >
+                <span className="path-recent-icon">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="10" />
+                    <polyline points="12 6 12 12 16 14" />
+                  </svg>
+                </span>
+                <span className="path-suggestion-name">{match.name}</span>
+                <span className="path-suggestion-path">
+                  {parts.map((part) =>
+                    typeof part === 'string' ? part : <mark key={part.key}>{part.highlighted}</mark>
+                  )}
+                </span>
+              </div>
+            );
+          })}
+
+          {/* Divider between sections when both have results */}
+          {fuzzyMatches.length > 0 && fsSuggestions.length > 0 && (
+            <div className="path-section-divider" />
+          )}
+
+          {/* Filesystem suggestions */}
+          {fsSuggestions.map((suggestion, fsIndex) => {
+            const combinedIndex = fuzzyMatches.length + fsIndex;
+            return (
+              <div
+                key={suggestion.path}
+                className={`path-suggestion-item ${combinedIndex === selectedIndex ? 'selected' : ''}`}
+                onClick={() => handleSelectPath(suggestion.path)}
+                onMouseEnter={() => setSelectedIndex(combinedIndex)}
+              >
+                <span className="path-folder-icon">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                  </svg>
+                </span>
+                <span className="path-suggestion-name">{suggestion.name}</span>
+                <span className="path-suggestion-path">{suggestion.path}</span>
+              </div>
+            );
+          })}
         </div>
       )}
 
-      {showSuggestions && suggestions.length === 0 && !isLoading && value && (
+      {showSuggestions && totalCount === 0 && !isLoading && value && (
         <div className="path-suggestions">
           <div className="path-no-results">No matching directories</div>
         </div>

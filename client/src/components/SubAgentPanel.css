@@ -29,12 +29,12 @@
 }
 
 .subagent-header:hover {
-  background: rgba(108, 113, 196, 0.1);
+  background: color-mix(in srgb, var(--violet) 10%, transparent);
 }
 
 .subagent-header:focus {
   outline: none;
-  background: rgba(108, 113, 196, 0.15);
+  background: color-mix(in srgb, var(--violet) 15%, transparent);
 }
 
 /* Status indicator dot */
@@ -46,12 +46,12 @@
 }
 
 .subagent-indicator.running {
-  background: var(--sol-green);
+  background: var(--green);
   animation: indicator-pulse 1.5s infinite;
 }
 
 .subagent-indicator.done {
-  background: var(--sol-cyan);
+  background: var(--cyan);
 }
 
 @keyframes indicator-pulse {
@@ -122,15 +122,15 @@
 
 .subagent-status.running,
 .subagent-status.pending {
-  color: var(--sol-green);
+  color: var(--green);
 }
 
 .subagent-status.completed {
-  color: var(--sol-cyan);
+  color: var(--cyan);
 }
 
 .subagent-status.error {
-  color: var(--sol-red);
+  color: var(--red);
 }
 
 /* Spinner for running status */
@@ -138,7 +138,7 @@
   width: 10px;
   height: 10px;
   border: 2px solid transparent;
-  border-top-color: var(--sol-green);
+  border-top-color: var(--green);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
@@ -202,11 +202,11 @@
 }
 
 .current-action.active {
-  color: var(--sol-yellow);
+  color: var(--yellow);
 }
 
 .current-action.done {
-  color: var(--sol-cyan);
+  color: var(--cyan);
 }
 
 /* Animation for new sub-agents appearing */

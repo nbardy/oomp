@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useSettings, PALETTES, type ColorPalette } from '../hooks/useSettings';
+import { useSettings, PALETTES, applyPalette, type Palette16 } from '../hooks/useSettings';
 import './ColorPalettePicker.css';
 
 interface Props {
@@ -17,44 +17,45 @@ function ColorBrick({ color, label }: { color: string; label: string }) {
   );
 }
 
-// Example chat preview
-function ChatPreview({ palette }: { palette: ColorPalette }) {
-  const { colors } = palette;
+// Accent color keys shown as swatches in the palette list and detail grid
+const ACCENT_KEYS = ['blue', 'cyan', 'violet', 'green', 'yellow', 'orange', 'red', 'magenta'] as const;
 
+// Example chat preview using Palette16 flat keys
+function ChatPreview({ palette }: { palette: Palette16 }) {
   return (
     <div
       className="chat-preview"
       style={{
-        backgroundColor: colors.background,
-        borderColor: colors.border,
+        backgroundColor: palette.base03,
+        borderColor: palette.base02,
       }}
     >
-      <div className="preview-header" style={{ borderColor: colors.border }}>
-        <span style={{ color: colors.text }}>Chat Preview</span>
-        <span className="preview-badge" style={{ backgroundColor: colors.primary, color: colors.background }}>
+      <div className="preview-header" style={{ borderColor: palette.base02 }}>
+        <span style={{ color: palette.base0 }}>Chat Preview</span>
+        <span className="preview-badge" style={{ backgroundColor: palette.violet, color: palette.base03 }}>
           claude
         </span>
       </div>
       <div className="preview-messages">
         <div className="preview-message user">
-          <span className="preview-role" style={{ color: colors.user }}>
+          <span className="preview-role" style={{ color: palette.blue }}>
             user
           </span>
-          <div className="preview-content" style={{ backgroundColor: colors.surface, color: colors.text }}>
+          <div className="preview-content" style={{ backgroundColor: palette.base02, color: palette.base0 }}>
             How do I implement a binary search?
           </div>
         </div>
         <div className="preview-message assistant">
-          <span className="preview-role" style={{ color: colors.assistant }}>
+          <span className="preview-role" style={{ color: palette.cyan }}>
             assistant
           </span>
-          <div className="preview-content" style={{ backgroundColor: colors.surface, color: colors.text }}>
+          <div className="preview-content" style={{ backgroundColor: palette.base02, color: palette.base0 }}>
             Here's a binary search implementation:
             <pre
               style={{
-                backgroundColor: colors.background,
-                borderColor: colors.border,
-                color: colors.textMuted,
+                backgroundColor: palette.base03,
+                borderColor: palette.base02,
+                color: palette.base01,
               }}
             >
               {`function binarySearch(arr, target) {
@@ -76,14 +77,19 @@ function ChatPreview({ palette }: { palette: ColorPalette }) {
 }
 
 export function ColorPalettePicker({ onClose }: Props) {
-  const { settings, setColorPalette, previewPalette, restorePalette } = useSettings();
+  const { settings, setColorPalette, previewPalette, restorePalette, addCustomPalette, allPalettes } = useSettings();
   const [selectedPalette, setSelectedPalette] = useState(settings.colorPalette);
+  const [aiMode, setAiMode] = useState(false);
+  const [aiDescription, setAiDescription] = useState('');
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
 
-  const currentPalette = PALETTES[selectedPalette] || PALETTES.solarized;
+  const currentPalette = allPalettes[selectedPalette] || PALETTES.solarized;
 
   const handleSelect = (key: string) => {
     setSelectedPalette(key);
     previewPalette(key);
+    setAiMode(false);
   };
 
   const handleSave = () => {
@@ -94,6 +100,38 @@ export function ColorPalettePicker({ onClose }: Props) {
   const handleCancel = () => {
     restorePalette();
     onClose();
+  };
+
+  const handleAiGenerate = async () => {
+    if (!aiDescription.trim() || isGenerating) return;
+
+    setIsGenerating(true);
+    setAiError(null);
+
+    try {
+      const res = await fetch('/api/generate-palette', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ description: aiDescription.trim() }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json() as { error: string };
+        throw new Error(data.error);
+      }
+
+      const { key, palette } = await res.json() as { key: string; palette: Palette16 };
+      addCustomPalette(key, palette);
+      setSelectedPalette(key);
+      // Apply directly -- previewPalette would read stale customPalettes closure
+      applyPalette(palette);
+      setAiMode(false);
+      setAiDescription('');
+    } catch (err) {
+      setAiError(err instanceof Error ? err.message : 'Failed to generate palette');
+    } finally {
+      setIsGenerating(false);
+    }
   };
 
   return (
@@ -108,7 +146,7 @@ export function ColorPalettePicker({ onClose }: Props) {
 
         <div className="palette-picker-content">
           <div className="palette-list">
-            {Object.entries(PALETTES).map(([key, palette]) => (
+            {Object.entries(allPalettes).map(([key, palette]) => (
               <button
                 key={key}
                 type="button"
@@ -116,31 +154,78 @@ export function ColorPalettePicker({ onClose }: Props) {
                 onClick={() => handleSelect(key)}
               >
                 <div className="palette-swatches">
-                  <div className="mini-swatch" style={{ backgroundColor: palette.colors.background }} />
-                  <div className="mini-swatch" style={{ backgroundColor: palette.colors.primary }} />
-                  <div className="mini-swatch" style={{ backgroundColor: palette.colors.secondary }} />
-                  <div className="mini-swatch" style={{ backgroundColor: palette.colors.accent }} />
+                  <div className="mini-swatch" style={{ backgroundColor: palette.base03 }} />
+                  <div className="mini-swatch" style={{ backgroundColor: palette.blue }} />
+                  <div className="mini-swatch" style={{ backgroundColor: palette.cyan }} />
+                  <div className="mini-swatch" style={{ backgroundColor: palette.violet }} />
                 </div>
                 <span className="palette-name">{palette.name}</span>
               </button>
             ))}
+
+            <div className="palette-list-divider" />
+
+            <button
+              type="button"
+              className={`ai-generate-btn ${aiMode ? 'active' : ''}`}
+              onClick={() => setAiMode(!aiMode)}
+            >
+              <span className="ai-sparkle">&#10022;</span>
+              AI Generate
+            </button>
           </div>
 
           <div className="palette-preview-section">
-            <ChatPreview palette={currentPalette} />
+            {aiMode ? (
+              <div className="ai-input-section">
+                <div className="ai-chat-row">
+                  <textarea
+                    className="ai-chat-input"
+                    placeholder="Describe your color palette..."
+                    value={aiDescription}
+                    onChange={(e) => setAiDescription(e.target.value)}
+                    disabled={isGenerating}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        handleAiGenerate();
+                      }
+                    }}
+                    rows={3}
+                  />
+                  <button
+                    type="button"
+                    className="ai-submit-btn"
+                    onClick={handleAiGenerate}
+                    disabled={isGenerating || !aiDescription.trim()}
+                  >
+                    {isGenerating ? (
+                      <span className="ai-generating">Generating<span className="ai-dots" /></span>
+                    ) : (
+                      'Generate'
+                    )}
+                  </button>
+                </div>
 
-            <div className="color-grid">
-              <ColorBrick color={currentPalette.colors.primary} label="Primary" />
-              <ColorBrick color={currentPalette.colors.secondary} label="Secondary" />
-              <ColorBrick color={currentPalette.colors.accent} label="Accent" />
-              <ColorBrick color={currentPalette.colors.background} label="Background" />
-              <ColorBrick color={currentPalette.colors.surface} label="Surface" />
-              <ColorBrick color={currentPalette.colors.text} label="Text" />
-              <ColorBrick color={currentPalette.colors.textMuted} label="Text Muted" />
-              <ColorBrick color={currentPalette.colors.border} label="Border" />
-              <ColorBrick color={currentPalette.colors.user} label="User" />
-              <ColorBrick color={currentPalette.colors.assistant} label="Assistant" />
-            </div>
+                {aiError && <div className="ai-error">{aiError}</div>}
+              </div>
+            ) : (
+              <>
+                <ChatPreview palette={currentPalette} />
+
+                <div className="color-grid">
+                  <ColorBrick color={currentPalette.base03} label="Base03 (bg)" />
+                  <ColorBrick color={currentPalette.base02} label="Base02 (surface)" />
+                  <ColorBrick color={currentPalette.base01} label="Base01 (muted)" />
+                  <ColorBrick color={currentPalette.base00} label="Base00 (secondary)" />
+                  <ColorBrick color={currentPalette.base0} label="Base0 (text)" />
+                  <ColorBrick color={currentPalette.base1} label="Base1 (emphasis)" />
+                  {ACCENT_KEYS.map((key) => (
+                    <ColorBrick key={key} color={currentPalette[key]} label={key.charAt(0).toUpperCase() + key.slice(1)} />
+                  ))}
+                </div>
+              </>
+            )}
           </div>
         </div>
 

@@ -7,7 +7,15 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "import": "./dist/index.js",
+      "require": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./adapters/jsonl.types": {
+      "types": "./dist/adapters/jsonl.types.d.ts",
+      "import": "./dist/adapters/jsonl.types.js",
+      "require": "./dist/adapters/jsonl.types.js",
+      "default": "./dist/adapters/jsonl.types.js"
     }
   },
   "scripts": {

@@ -1,33 +1,61 @@
 .folder-filter {
   display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 24px;
+  background: var(--bg-card);  /* Tier 2 */
+  border-bottom: 1px solid var(--border-default);
+}
+
+.folder-filter-header {
+  display: flex;
   align-items: center;
   gap: 12px;
-  padding: 12px 16px;
-  background: #252525;
-  border-bottom: 1px solid #3a3a3a;
-  flex-wrap: wrap;
 }
 
 .folder-filter-label {
   font-size: 12px;
-  color: #888;
+  color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.5px;
   font-weight: 600;
+  flex-shrink: 0;
+}
+
+.folder-search {
+  flex: 1;
+  max-width: 240px;
+  padding: 4px 10px;
+  background: var(--bg-content);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 12px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.folder-search::placeholder {
+  color: var(--text-muted);
+}
+
+.folder-search:focus {
+  border-color: var(--cyan);
 }
 
 .folder-filter-chips {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  align-items: center;
 }
 
 .folder-chip {
   padding: 4px 12px;
-  background: #3a3a3a;
-  border: 1px solid #4a4a4a;
+  background: var(--bg-panel);  /* Tier 3 */
+  border: 1px solid var(--border-subtle);
   border-radius: 16px;
-  color: #888;
+  color: var(--text-secondary);
   font-size: 12px;
   cursor: pointer;
   transition: all 0.15s ease;
@@ -38,36 +66,117 @@
 }
 
 .folder-chip:hover {
-  background: #4a4a4a;
-  border-color: #5a5a5a;
+  background: var(--bg-hover);  /* Tier 4 on hover */
+  border-color: var(--border-default);
+  color: var(--text-primary);
 }
 
 .folder-chip.active {
-  color: #e0e0e0;
+  color: var(--text-emphasis);
 }
 
 .folder-chip.selected {
-  background: rgba(124, 58, 237, 0.2);
-  border-color: #7c3aed;
-  color: #a78bfa;
+  background: var(--cyan-glow);
+  border-color: var(--cyan);
+  color: var(--cyan-bright);
 }
 
 .folder-chip.selected:hover {
-  background: rgba(124, 58, 237, 0.3);
+  background: color-mix(in srgb, var(--cyan) 35%, transparent);
+}
+
+/* "N older folders..." and "show less" button */
+.folder-chip-more {
+  background: transparent;
+  border: 1px dashed var(--border-default);
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.folder-chip-more:hover {
+  background: var(--bg-hover);
+  border-color: var(--yellow);
+  color: var(--yellow-bright);
+  font-style: italic;
 }
 
 .folder-filter-clear {
   padding: 4px 10px;
   background: transparent;
-  border: 1px solid #4a4a4a;
+  border: 1px solid var(--border-default);
   border-radius: 4px;
-  color: #888;
+  color: var(--text-secondary);
   font-size: 11px;
   cursor: pointer;
   transition: all 0.15s ease;
+  align-self: flex-start;
 }
 
 .folder-filter-clear:hover {
-  background: #3a3a3a;
-  color: #e0e0e0;
+  background: var(--bg-hover);
+  border-color: var(--orange);
+  color: var(--orange-bright);
+}
+
+/* Fuzzy match highlighting */
+.fuzzy-highlight {
+  background: transparent;
+  color: var(--cyan-bright);
+  font-weight: 700;
+}
+
+/* Conversation search results section */
+.folder-filter-conversations {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.folder-filter-sublabel {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 600;
+}
+
+.conversation-results {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.conversation-result {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 10px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-align: left;
+}
+
+.conversation-result:hover {
+  background: var(--bg-hover);
+  border-color: var(--cyan);
+  color: var(--text-primary);
+}
+
+.conversation-result-id {
+  font-family: monospace;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  font-size: 11px;
+}
+
+.conversation-result-snippet {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }

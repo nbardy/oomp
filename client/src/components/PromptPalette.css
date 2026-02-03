@@ -13,8 +13,8 @@
 }
 
 .prompt-palette {
-  background: #2a2a2a;
-  border: 1px solid #3a3a3a;
+  background: var(--bg-panel);
+  border: 1px solid var(--bg-hover);
   border-radius: 12px;
   width: 100%;
   max-width: 600px;
@@ -28,15 +28,15 @@
   padding: 16px 20px;
   background: transparent;
   border: none;
-  border-bottom: 1px solid #3a3a3a;
-  color: #e0e0e0;
+  border-bottom: 1px solid var(--bg-hover);
+  color: var(--text-emphasis);
   font-size: 16px;
   outline: none;
   box-sizing: border-box;
 }
 
 .prompt-palette-input::placeholder {
-  color: #666;
+  color: var(--text-muted);
 }
 
 .prompt-palette-results {
@@ -47,12 +47,12 @@
 .prompt-palette-item {
   padding: 12px 20px;
   cursor: pointer;
-  border-bottom: 1px solid #333;
+  border-bottom: 1px solid var(--border-default);
 }
 
 .prompt-palette-item:hover,
 .prompt-palette-item.selected {
-  background: #3a3a3a;
+  background: var(--bg-hover);
 }
 
 .prompt-item-header {
@@ -64,17 +64,17 @@
 
 .prompt-name {
   font-weight: 500;
-  color: #e0e0e0;
+  color: var(--text-emphasis);
 }
 
 .prompt-usage {
   font-size: 11px;
-  color: #666;
+  color: var(--text-muted);
 }
 
 .prompt-preview {
   font-size: 13px;
-  color: #999;
+  color: var(--text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -83,5 +83,5 @@
 .prompt-palette-empty {
   padding: 40px 20px;
   text-align: center;
-  color: #666;
+  color: var(--text-muted);
 }
