@@ -137,6 +137,32 @@ interface SwarmRun {
   summary: SwarmRunSummary | null;
 }
 
+type OompaWorkerStatus = 'starting' | 'idle' | 'running' | 'done' | 'error';
+
+interface OompaRuntimeWorker {
+  id: string;
+  status: OompaWorkerStatus;
+  lastEvent: string;
+}
+
+interface OompaRuntimeRun {
+  runId: string;
+  swarmId: string | null;
+  isRunning: boolean;
+  totalWorkers: number;
+  activeWorkers: number;
+  doneWorkers: number;
+  configPath: string | null;
+  logFile: string | null;
+  workers: OompaRuntimeWorker[];
+}
+
+interface OompaRuntimeSnapshot {
+  available: boolean;
+  run: OompaRuntimeRun | null;
+  reason: string | null;
+}
+
 // =============================================================================
 // WorkerChatPane — renders one worker's messages in a mini Chat view
 // =============================================================================
@@ -149,10 +175,12 @@ function WorkerChatPane({
   conversationId,
   label,
   accentColor,
+  runningState,
 }: {
   conversationId: string | null;
   label: string;
   accentColor: 'cyan' | 'magenta';
+  runningState: 'running' | 'idle';
 }) {
   const conversation = useConversationStore((s) =>
     conversationId ? s.conversations.get(conversationId) ?? null : null,
@@ -195,9 +223,9 @@ function WorkerChatPane({
             {model}
           </span>
         )}
-        <div className={`state-badge state-${conversation.isRunning ? 'running' : 'idle'}`}>
+        <div className={`state-badge state-${runningState}`}>
           <div className="state-indicator" />
-          <span className="state-label">{conversation.isRunning ? 'Running' : 'Idle'}</span>
+          <span className="state-label">{runningState === 'running' ? 'Running' : 'Idle'}</span>
         </div>
       </div>
       <div className="worker-pane-messages">
@@ -525,6 +553,61 @@ export function SwarmDetail() {
   const conversations = useConversationStore((s) => s.conversations);
   const promotedWorkers = useUIStore((s) => s.promotedWorkers);
   const promotedSet = useMemo(() => new Set(promotedWorkers), [promotedWorkers]);
+  const [runtimeSnapshot, setRuntimeSnapshot] = useState<OompaRuntimeSnapshot | null>(null);
+  const [runtimeTick, setRuntimeTick] = useState(0);
+
+  const runtimeWorkerStates = useMemo(() => {
+    const map = new Map<string, OompaRuntimeWorker>();
+    if (!runtimeSnapshot?.available || !runtimeSnapshot.run) return map;
+    for (const worker of runtimeSnapshot.run.workers) {
+      map.set(worker.id, worker);
+    }
+    return map;
+  }, [runtimeSnapshot]);
+
+  const isWorkerRunningLive = useCallback(
+    (worker: Conversation): boolean => {
+      const key = worker.workerId ?? worker.id;
+      const state = runtimeWorkerStates.get(key);
+      if (!state) return worker.isRunning;
+      return state.status === 'running' || state.status === 'starting';
+    },
+    [runtimeWorkerStates],
+  );
+
+  useEffect(() => {
+    const id = setInterval(() => setRuntimeTick((tick) => tick + 1), 10_000);
+    return () => clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    if (!projectRoot) {
+      setRuntimeSnapshot(null);
+      return;
+    }
+
+    const controller = new AbortController();
+    const fetchRuntime = async () => {
+      try {
+        const response = await fetch(`/api/swarm-runtime?dir=${encodeURIComponent(projectRoot)}`, {
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          setRuntimeSnapshot({ available: false, run: null, reason: `HTTP ${response.status}` });
+          return;
+        }
+        const snapshot = (await response.json()) as OompaRuntimeSnapshot;
+        setRuntimeSnapshot(snapshot);
+      } catch {
+        if (!controller.signal.aborted) {
+          setRuntimeSnapshot({ available: false, run: null, reason: 'Failed to load runtime snapshot' });
+        }
+      }
+    };
+
+    void fetchRuntime();
+    return () => controller.abort();
+  }, [projectRoot, runtimeTick]);
 
   // Tick every 30s for time-ago
   const [, setTick] = useState(0);
@@ -555,8 +638,10 @@ export function SwarmDetail() {
 
     // Sort execs: running first, then by most recent activity
     const sortByActivity = (a: Conversation, b: Conversation) => {
-      if (a.isRunning && !b.isRunning) return -1;
-      if (!a.isRunning && b.isRunning) return 1;
+      const aRunning = isWorkerRunningLive(a);
+      const bRunning = isWorkerRunningLive(b);
+      if (aRunning && !bRunning) return -1;
+      if (!aRunning && bRunning) return 1;
       const aTime = getLastMessageTime(a.messages)?.getTime() ?? 0;
       const bTime = getLastMessageTime(b.messages)?.getTime() ?? 0;
       return bTime - aTime;
@@ -600,7 +685,7 @@ export function SwarmDetail() {
       reviewCount: reviewsAndFixes.filter((r) => r.workerRole === 'review').length,
       fixCount: reviewsAndFixes.filter((r) => r.workerRole === 'fix').length,
     };
-  }, [conversations, promotedSet, projectRoot]);
+  }, [conversations, promotedSet, projectRoot, isWorkerRunningLive]);
 
   // Selected exec group — click a worker to show task log (left) + review (right)
   const [selectedGroupIdx, setSelectedGroupIdx] = useState<number>(0);
@@ -610,18 +695,38 @@ export function SwarmDetail() {
     if (didInit.current || execGroups.length === 0) return;
     didInit.current = true;
     // Prefer running exec for initial selection
-    const runningIdx = execGroups.findIndex((g) => g.exec.isRunning);
+    const runningIdx = execGroups.findIndex((g) => isWorkerRunningLive(g.exec));
     if (runningIdx >= 0) setSelectedGroupIdx(runningIdx);
-  }, [execGroups]);
+  }, [execGroups, isWorkerRunningLive]);
 
   // Derive pane IDs from selected group
   const selectedGroup = execGroups[selectedGroupIdx] ?? null;
   const taskPaneId = selectedGroup?.exec.id ?? null;
   // Show the most recent review for this exec group
   const reviewPaneId = selectedGroup?.reviews[0]?.id ?? null;
+  const taskPaneRunning = useMemo(() => {
+    if (!taskPaneId) return false;
+    const taskConv = conversations.get(taskPaneId);
+    if (!taskConv) return false;
+    return isWorkerRunningLive(taskConv);
+  }, [conversations, taskPaneId, isWorkerRunningLive]);
+  const reviewPaneRunning = useMemo(() => {
+    if (!reviewPaneId) return false;
+    const reviewConv = conversations.get(reviewPaneId);
+    if (!reviewConv) return false;
+    return isWorkerRunningLive(reviewConv);
+  }, [conversations, reviewPaneId, isWorkerRunningLive]);
 
   // Computed stats
-  const runningCount = useMemo(() => allWorkers.filter((w) => w.isRunning).length, [allWorkers]);
+  const runningCount = useMemo(
+    () => allWorkers.filter((w) => isWorkerRunningLive(w)).length,
+    [allWorkers, isWorkerRunningLive],
+  );
+  const runtimeRunning = runtimeSnapshot?.available ? runtimeSnapshot.run?.activeWorkers ?? 0 : runningCount;
+  const runtimeTotalWorkers = runtimeSnapshot?.available ? runtimeSnapshot.run?.totalWorkers ?? allWorkers.length : allWorkers.length;
+  const displayRunning = runtimeSnapshot?.available ? Math.min(runtimeRunning, runtimeTotalWorkers) : runningCount;
+  const displayIdle = Math.max(runtimeTotalWorkers - displayRunning, 0);
+
   const earliestCreated = useMemo(() => {
     let earliest: Date | undefined;
     for (const w of allWorkers) {
@@ -657,10 +762,10 @@ export function SwarmDetail() {
         <h2>{projectName}</h2>
         <span className="swarm-detail-path">{displayPath}</span>
         <div className="swarm-detail-header-stats">
-          <div className={`state-badge state-${runningCount > 0 ? 'running' : 'idle'}`}>
+          <div className={`state-badge state-${displayRunning > 0 ? 'running' : 'idle'}`}>
             <div className="state-indicator" />
             <span className="state-label">
-              {runningCount > 0 ? `${runningCount} running` : 'All idle'}
+              {displayRunning > 0 ? `${displayRunning} running` : 'All idle'}
             </span>
           </div>
           <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
@@ -701,6 +806,8 @@ export function SwarmDetail() {
                 const w = group.exec;
                 const isSelected = groupIdx === selectedGroupIdx;
                 const model = shortModelName(w.modelName);
+                const isRunning = isWorkerRunningLive(w);
+                const statusClass = isRunning ? 'running' : 'idle';
                 // Aggregate verdict from most recent review
                 const latestVerdict = group.reviews.length > 0 && group.reviews[0].workerRole === 'review'
                   ? extractVerdict(group.reviews[0])
@@ -712,7 +819,7 @@ export function SwarmDetail() {
                     onClick={() => setSelectedGroupIdx(groupIdx)}
                   >
                     <div className={`roster-worker ${isSelected ? 'selected' : ''}`}>
-                      <span className={`roster-status-dot ${w.isRunning ? 'running' : 'idle'}`} />
+                      <span className={`roster-status-dot ${statusClass}`} />
                       <span className="roster-worker-id">
                         {w.workerId ?? w.id.substring(0, 8)}
                       </span>
@@ -733,11 +840,11 @@ export function SwarmDetail() {
             <div className="roster-stats">
               <div className="roster-stat-row">
                 <span>Running</span>
-                <span className="roster-stat-value">{runningCount}</span>
+                <span className="roster-stat-value">{displayRunning}</span>
               </div>
               <div className="roster-stat-row">
                 <span>Idle</span>
-                <span className="roster-stat-value">{allWorkers.length - runningCount}</span>
+                <span className="roster-stat-value">{displayIdle}</span>
               </div>
               {earliestCreated && (
                 <div className="roster-stat-row">
@@ -750,8 +857,18 @@ export function SwarmDetail() {
 
           {/* Task log (left) + Review (right) panes for selected worker */}
           <div className="swarm-panes">
-            <WorkerChatPane conversationId={taskPaneId} label="Task Log" accentColor="cyan" />
-            <WorkerChatPane conversationId={reviewPaneId} label="Review" accentColor="magenta" />
+            <WorkerChatPane
+              conversationId={taskPaneId}
+              label="Task Log"
+              accentColor="cyan"
+              runningState={taskPaneRunning ? 'running' : 'idle'}
+            />
+            <WorkerChatPane
+              conversationId={reviewPaneId}
+              label="Review"
+              accentColor="magenta"
+              runningState={reviewPaneRunning ? 'running' : 'idle'}
+            />
           </div>
         </div>
       )}

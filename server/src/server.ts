@@ -1654,6 +1654,207 @@ function isUnderKnownProject(resolved: string): boolean {
   return false;
 }
 
+type OompaWorkerStatus = 'starting' | 'idle' | 'running' | 'done' | 'error';
+
+interface OompaRuntimeWorkerState {
+  id: string;
+  status: OompaWorkerStatus;
+  lastEvent: string;
+}
+
+interface OompaRuntimeSnapshot {
+  available: boolean;
+  run: {
+    runId: string;
+    swarmId: string | null;
+    isRunning: boolean;
+    totalWorkers: number;
+    activeWorkers: number;
+    doneWorkers: number;
+    configPath: string | null;
+    logFile: string | null;
+    workers: OompaRuntimeWorkerState[];
+  } | null;
+  reason: string | null;
+}
+
+function parseRunMetaFile(metaPath: string): Record<string, string> {
+  const meta: Record<string, string> = {};
+  const content = fs.readFileSync(metaPath, 'utf-8');
+  for (const line of content.split(/\r?\n/)) {
+    if (!line) continue;
+    const idx = line.indexOf('=');
+    if (idx <= 0) continue;
+    const key = line.slice(0, idx).trim();
+    const value = line.slice(idx + 1).trim();
+    meta[key] = value;
+  }
+  return meta;
+}
+
+function isPidAlive(pidValue: string | undefined): boolean {
+  if (!pidValue) return false;
+  const pid = Number.parseInt(pidValue, 10);
+  if (!Number.isFinite(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function classifyWorkerEvent(event: string, previous: OompaWorkerStatus | undefined): OompaWorkerStatus {
+  if (/Received __DONE__ signal|Worker done after/i.test(event)) return 'done';
+  if (/error|exception|failed|fatal/i.test(event)) return 'error';
+  if (/Waiting for tasks|No tasks after/i.test(event)) return 'idle';
+  if (/Starting worker/i.test(event)) return 'starting';
+  if (
+    /Starting iteration|Resuming iteration|Working\.\.\.|Review attempt|Reviewer verdict|Reviewer requested changes|Merging changes|Merge successful|Iteration .* complete/i.test(
+      event,
+    )
+  ) {
+    return 'running';
+  }
+  return previous ?? 'starting';
+}
+
+function safeReadJson(filePath: string): unknown | null {
+  try {
+    if (!fs.existsSync(filePath)) return null;
+    const raw = fs.readFileSync(filePath, 'utf-8');
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function readLatestOompaRuntime(projectRoot: string): OompaRuntimeSnapshot {
+  const logsDir = path.join(projectRoot, 'oompa', 'logs');
+  if (!fs.existsSync(logsDir)) {
+    return { available: false, run: null, reason: 'No oompa/logs directory found' };
+  }
+
+  const metaFiles = fs
+    .readdirSync(logsDir)
+    .filter((f) => /^run_.+\.meta$/.test(f))
+    .map((f) => path.join(logsDir, f))
+    .sort((a, b) => {
+      const aMtime = fs.statSync(a).mtimeMs;
+      const bMtime = fs.statSync(b).mtimeMs;
+      return bMtime - aMtime;
+    });
+
+  if (metaFiles.length === 0) {
+    return { available: false, run: null, reason: 'No run_*.meta files found' };
+  }
+
+  const latestMetaPath = metaFiles[0];
+  const meta = parseRunMetaFile(latestMetaPath);
+  const runId =
+    meta.run_id ??
+    path
+      .basename(latestMetaPath)
+      .replace(/^run_/, '')
+      .replace(/\.meta$/, '');
+
+  const bbAlive = isPidAlive(meta.bb_pid);
+  const scriptAlive = isPidAlive(meta.script_pid);
+  const isRunning = bbAlive || scriptAlive;
+
+  let logFile = meta.log_file ?? null;
+  if (logFile && !path.isAbsolute(logFile)) {
+    logFile = path.join(projectRoot, logFile);
+  }
+  if (!logFile || !fs.existsSync(logFile)) {
+    const guessed = fs
+      .readdirSync(logsDir)
+      .filter((f) => f.includes(runId) && f.endsWith('.log'))
+      .map((f) => path.join(logsDir, f))
+      .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
+    logFile = guessed[0] ?? null;
+  }
+
+  let swarmId: string | null = null;
+  let totalWorkers = 0;
+  const workerStates = new Map<string, OompaRuntimeWorkerState>();
+
+  if (logFile && fs.existsSync(logFile)) {
+    const content = fs.readFileSync(logFile, 'utf-8');
+    for (const line of content.split(/\r?\n/)) {
+      if (!swarmId) {
+        const m = line.match(/Swarm ID:\s*([a-z0-9]+)/i);
+        if (m) swarmId = m[1];
+      }
+      if (!totalWorkers) {
+        const m = line.match(/Workers:\s+(\d+)\s+total/i);
+        if (m) totalWorkers = Number.parseInt(m[1], 10) || 0;
+      }
+
+      const re = /\[([^\]]+)\]\s([^[]+)/g;
+      let match: RegExpExecArray | null;
+      while ((match = re.exec(line)) !== null) {
+        const workerId = match[1].trim();
+        const event = match[2].trim();
+        if (!/^[a-z][a-z0-9_-]*\d+$/i.test(workerId)) continue;
+        const prev = workerStates.get(workerId);
+        const status = classifyWorkerEvent(event, prev?.status);
+        workerStates.set(workerId, { id: workerId, status, lastEvent: event });
+      }
+    }
+  }
+
+  if (swarmId) {
+    const runJsonPath = path.join(projectRoot, 'runs', swarmId, 'run.json');
+    const runJson = safeReadJson(runJsonPath);
+    if (runJson && typeof runJson === 'object' && runJson !== null) {
+      const maybeWorkers = (runJson as { workers?: Array<{ id?: string }> }).workers;
+      if (Array.isArray(maybeWorkers)) {
+        if (!totalWorkers) totalWorkers = maybeWorkers.length;
+        for (const worker of maybeWorkers) {
+          const workerId = worker?.id;
+          if (typeof workerId !== 'string' || !workerId) continue;
+          if (!workerStates.has(workerId)) {
+            workerStates.set(workerId, {
+              id: workerId,
+              status: isRunning ? 'starting' : 'idle',
+              lastEvent: 'No live event yet',
+            });
+          }
+        }
+      }
+    }
+  }
+
+  if (!totalWorkers) totalWorkers = workerStates.size;
+
+  const states = Array.from(workerStates.values()).sort((a, b) => a.id.localeCompare(b.id));
+  const doneWorkers = states.filter((w) => w.status === 'done').length;
+  let activeWorkers = states.filter((w) => w.status !== 'done' && w.status !== 'error').length;
+  if (isRunning && totalWorkers > states.length) {
+    activeWorkers += totalWorkers - states.length;
+  }
+  if (isRunning && totalWorkers > 0 && activeWorkers === 0) {
+    activeWorkers = totalWorkers;
+  }
+
+  return {
+    available: true,
+    run: {
+      runId,
+      swarmId,
+      isRunning,
+      totalWorkers,
+      activeWorkers,
+      doneWorkers,
+      configPath: meta.config_path ?? null,
+      logFile,
+      workers: states,
+    },
+    reason: null,
+  };
+}
+
 app.get('/api/git-log', (req: Request, res: Response) => {
   const dir = req.query.dir as string;
   if (!dir || !dir.startsWith('/')) {
@@ -1770,6 +1971,23 @@ app.get('/api/swarm-runs', (req: Request, res: Response) => {
     });
 
   res.json({ runs });
+});
+
+app.get('/api/swarm-runtime', (req: Request, res: Response) => {
+  const dir = req.query.dir as string;
+  if (!dir || !dir.startsWith('/')) {
+    res.status(400).json({ error: 'Absolute directory path required' });
+    return;
+  }
+
+  const resolved = path.resolve(dir);
+  if (!isUnderKnownProject(resolved)) {
+    res.status(403).json({ error: 'Directory not associated with any conversation' });
+    return;
+  }
+
+  const snapshot = readLatestOompaRuntime(resolved);
+  res.json(snapshot);
 });
 
 app.get('/api/swarm-reviews', (req: Request, res: Response) => {

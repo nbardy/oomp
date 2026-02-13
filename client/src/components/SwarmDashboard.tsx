@@ -19,11 +19,44 @@ interface SwarmProject {
   swarmIds: Set<string>;
 }
 
+type OompaWorkerStatus = 'starting' | 'idle' | 'running' | 'done' | 'error';
+
+interface OompaRuntimeWorker {
+  id: string;
+  status: OompaWorkerStatus;
+  lastEvent: string;
+}
+
+interface OompaRuntimeRun {
+  runId: string;
+  swarmId: string | null;
+  isRunning: boolean;
+  totalWorkers: number;
+  activeWorkers: number;
+  doneWorkers: number;
+  configPath: string | null;
+  logFile: string | null;
+  workers: OompaRuntimeWorker[];
+}
+
+interface OompaRuntimeSnapshot {
+  available: boolean;
+  run: OompaRuntimeRun | null;
+  reason: string | null;
+}
+
 export function SwarmDashboard() {
   const conversations = useConversationStore((s) => s.conversations);
   const navigate = useNavigate();
   const promotedWorkers = useUIStore((s) => s.promotedWorkers);
   const promotedSet = useMemo(() => new Set(promotedWorkers), [promotedWorkers]);
+  const [runtimeSnapshots, setRuntimeSnapshots] = useState<Record<string, OompaRuntimeSnapshot>>({});
+  const [runtimeTick, setRuntimeTick] = useState(0);
+
+  useEffect(() => {
+    const id = setInterval(() => setRuntimeTick((tick) => tick + 1), 10_000);
+    return () => clearInterval(id);
+  }, []);
 
   // Tick every 30s to keep time-ago displays current
   const [, setTick] = useState(0);
@@ -46,6 +79,12 @@ export function SwarmDashboard() {
     return Array.from(groups.entries())
       .map(([projectRoot, workers]) => {
         const runningCount = workers.filter((w) => w.isRunning).length;
+        const runtime = runtimeSnapshots[projectRoot];
+        const runtimeRun = runtime?.available ? runtime.run : null;
+        const totalWorkers = runtimeRun?.totalWorkers
+          ? Math.max(runtimeRun.totalWorkers, workers.length)
+          : workers.length;
+        const liveRunningCount = runtimeRun ? Math.min(runtimeRun.activeWorkers, totalWorkers) : runningCount;
         const swarmIds = new Set<string>();
         let latestActivity: Date | undefined;
 
@@ -61,8 +100,8 @@ export function SwarmDashboard() {
           projectRoot,
           projectName: getProjectName(projectRoot),
           workers,
-          runningCount,
-          idleCount: workers.length - runningCount,
+          runningCount: runtimeRun ? liveRunningCount : runningCount,
+          idleCount: Math.max(totalWorkers - (runtimeRun ? liveRunningCount : runningCount), 0),
           latestActivity,
           accentColor: getProjectColor(projectRoot),
           swarmIds,
@@ -76,7 +115,47 @@ export function SwarmDashboard() {
         const bTime = b.latestActivity?.getTime() ?? 0;
         return bTime - aTime;
       });
-  }, [conversations, promotedSet]);
+  }, [conversations, promotedSet, runtimeSnapshots]);
+
+  const runtimeProjectRoots = useMemo(() => {
+    return [...new Set(swarmProjects.map((project) => project.projectRoot))].sort();
+  }, [swarmProjects]);
+
+  useEffect(() => {
+    if (runtimeProjectRoots.length === 0) {
+      setRuntimeSnapshots({});
+      return;
+    }
+
+    const controller = new AbortController();
+    const fetchRuntime = async () => {
+      const entries = await Promise.all(
+        runtimeProjectRoots.map(async (projectRoot) => {
+          try {
+            const response = await fetch(`/api/swarm-runtime?dir=${encodeURIComponent(projectRoot)}`, {
+              signal: controller.signal,
+            });
+            if (!response.ok) return { projectRoot, snapshot: null };
+            const snapshot = (await response.json()) as OompaRuntimeSnapshot;
+            return { projectRoot, snapshot };
+          } catch {
+            return { projectRoot, snapshot: null };
+          }
+        }),
+      );
+
+      if (controller.signal.aborted) return;
+      const next: Record<string, OompaRuntimeSnapshot> = {};
+      for (const { projectRoot, snapshot } of entries) {
+        if (!snapshot) continue;
+        next[projectRoot] = snapshot;
+      }
+      setRuntimeSnapshots(next);
+    };
+
+    void fetchRuntime();
+    return () => controller.abort();
+  }, [runtimeProjectRoots, runtimeTick]);
 
   if (swarmProjects.length === 0) {
     return (
