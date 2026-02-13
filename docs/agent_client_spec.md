@@ -1,6 +1,6 @@
 # Agent Client Spec
 
-How CLI agents (Claude, Codex, future) are wrapped and consumed by the server.
+How CLI agents (Claude, Codex, OpenCode, future) are wrapped and consumed by the server.
 
 ## Two Usage Modes
 
@@ -16,7 +16,7 @@ spawn(command, args) → write stdin → close stdin → read stdout lines → p
 ```
 
 **Key properties:**
-- Session continuity via provider-specific mechanisms (Claude: `--session-id`/`--resume`, Codex: `exec resume <thread_id>`)
+- Session continuity via provider-specific mechanisms (Claude: `--session-id`/`--resume`, Codex: `exec resume <thread_id>`, OpenCode: `run --session <id>`)
 - Streaming output: each stdout line is a JSON object parsed into a `ProviderEvent`
 - stdout may split JSON across multiple `data` events — must buffer by newline
 - Process exits after each message; a new process is spawned for the next message
@@ -31,6 +31,7 @@ One prompt in, one response out. No session. Stdout is collected in full, then p
 ```
 Claude: spawn('claude', ['-p', prompt, '--output-format', 'text']) → collect stdout → parse
 Codex:  spawn('codex', ['exec', '--dangerously-bypass-approvals-and-sandbox', prompt]) → collect stdout → parse
+OpenCode: spawn('opencode', ['run', prompt]) → collect stdout → parse
 ```
 
 **Key properties:**
@@ -47,7 +48,7 @@ Defined in `server/src/providers/index.ts`
 
 ```typescript
 interface Provider {
-  name: ProviderName;                                      // 'claude' | 'codex'
+  name: ProviderName;                                      // 'claude' | 'codex' | 'opencode'
   listModels(): ModelInfo[];                               // Available models for dropdown
   modelToParams(modelId?): string[];                       // Model ID → CLI flags
   getSpawnConfig(sessionId, workingDir, resume?, modelId?): SpawnConfig;
@@ -99,25 +100,34 @@ modelToParams('opus') → ['--model', 'opus']
 
 ### Codex
 ```
-listModels() → [gpt-5.2-high (default), gpt-5.2-medium, gpt-5.2-xhigh]
-modelToParams('gpt-5.2-high') → ['-m', 'gpt-5.2', '-c', 'model_reasoning_effort=high']
+listModels() → [gpt-5.3-codex-high (default), gpt-5.3-codex-medium, gpt-5.3-codex-xhigh]
+modelToParams('gpt-5.3-codex-high') → ['-m', 'gpt-5.3-codex', '-c', 'reasoning.effort=high']
 ```
 
 Codex uses composite model IDs that encode both model name and reasoning effort level. The `modelToParams()` method decomposes them by matching known effort suffixes (`medium`, `high`, `xhigh`).
+
+### OpenCode
+```
+listModels() → ['openai/gpt-5', 'openai/gpt-5-mini', ...]
+modelToParams('openai/gpt-5') → ['-m', 'openai/gpt-5']
+```
+
+OpenCode model IDs use a path-style format (`provider/model`, optionally with additional segments such as `openrouter/openai/gpt-5`). This keeps OpenCode flexible while preventing accidental overlap with Claude/Codex IDs.
 
 ## How the Server Consumes Providers
 
 ### Conversation Flow (server/src/server.ts)
 
 ```
-1. Conversation created with provider name ('claude' | 'codex') and optional model
+1. Conversation created with provider name ('claude' | 'codex' | 'opencode') and optional model
+   - Server validates provider/model compatibility at creation and on `set_model`
 2. constructor() calls getProvider(name) to get Provider instance
 3. User sends message → queue_message (WS) → server enqueueMessage() → processQueue() → sendMessage()
 4. sendMessage() calls spawnForMessage(content):
    a. provider.getSpawnConfig(sessionId, workingDir, resume, model)
    b. spawn(config.command, config.args, config.options)
    c. stdout.on('data') → buffer by newline → JSON.parse each line
-   d. For Codex: intercept thread.started to capture thread_id as sessionId
+   d. For providers that emit canonical session IDs (Codex/OpenCode), intercept stdout events and capture IDs for resume
    e. handleOutput(json) → provider.parseOutput(json) → ProviderEvent
    f. stdin.write(content + '\n') → stdin.end()
 5. handleOutput(json):
@@ -146,9 +156,15 @@ Codex uses composite model IDs that encode both model name and reasoning effort 
 - The `-` positional argument tells Codex to read the prompt from stdin
 - Codex self-persists sessions to `~/.codex/sessions/YYYY/MM/DD/*.jsonl`
 
+### OpenCode
+- First message: `opencode run --format json` (reads prompt from stdin)
+- OpenCode emits `sessionID` on JSON events (top-level or `part`) — the server captures this for resume
+- Subsequent messages: `opencode run --format json --session <sessionID> --continue`
+- If no valid `sessionID` has been captured yet, server omits `--session` and starts a new one
+
 ## Stdout Parsing
 
-Both providers emit one JSON object per line on stdout.
+All providers emit one JSON object per line on stdout in conversation JSON mode.
 
 **Buffering** (`server/src/server.ts`):
 - Node `data` events can split a JSON line across multiple chunks
@@ -174,6 +190,14 @@ Both providers emit one JSON object per line on stdout.
 - `item.completed` (file_change) → tool_use (shows file paths)
 - `turn.completed` → message_complete
 
+**OpenCode's protocol** (`run --format json`):
+- `step_start` → message_start
+- `text` → text_delta
+- `tool_use` / `part.type=tool` → tool_use
+- `step_finish` with `reason=tool-calls` → message_start (intermediate, not final)
+- `step_finish` with final reason (e.g. `stop`) → message_complete
+- Parser is defensive against schema drift and attempts safe text extraction from unknown event variants
+
 ## Persistence
 
 ### Claude Code
@@ -183,14 +207,20 @@ Both providers emit one JSON object per line on stdout.
 
 ### Codex
 - Self-persists to `~/.codex/sessions/YYYY/MM/DD/*.jsonl`
-- We also write to `~/.claude-web-view/codex/{encoded-path}/{session-id}.jsonl`
-- Adapter: `server/src/adapters/codex-persistence.ts`
-- Persistence failures logged but never throw
+- Server does not mirror-write Codex files; native Codex sessions are the source of truth
+- During active turns, in-memory streaming state is authoritative; file poller skips active session IDs
+- For Codex spawned sub-agent sessions, `session_meta.payload.source.subagent.thread_spawn.parent_thread_id` is mapped to `Conversation.parentConversationId` and projected into the same header sub-agent panel used by provider Task-tool sub-agents
+
+### OpenCode
+- Self-persists message metadata to `~/.local/share/opencode/storage/message/{session-id}/*.json`
+- Message content is reconstructed from associated part files in `~/.local/share/opencode/storage/part/{message-id}/*.json`
+- Session metadata (cwd/title/time) is read from `~/.local/share/opencode/storage/session/{project-id}/{session-id}.json` when present
+- During active turns, in-memory streaming state is authoritative; file poller skips active session IDs
 
 ### Loading
-- `server/src/adapters/jsonl.ts` loads both Claude and Codex sessions
-- `inferProviderFromModel(model)` determines which provider a JSONL session belongs to
-- Polling detects external changes (user ran `claude` in terminal)
+- `server/src/adapters/jsonl.ts` loads Claude from `~/.claude/projects/*`, Codex from `~/.codex/sessions/YYYY/MM/DD/*`, and OpenCode from `~/.local/share/opencode/storage/message/*`
+- `inferProviderFromModel(model)` is used only for Claude-format entries; native Codex/OpenCode sources are loaded as `provider=codex` / `provider=opencode`
+- Polling detects external changes for all three providers (user ran `claude` / `codex` / `opencode` in terminal)
 
 ## Permissions
 

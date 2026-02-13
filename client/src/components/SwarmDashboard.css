@@ -1,0 +1,171 @@
+/* =============================================================================
+   SwarmDashboard.css — Project-level overview for oompa worker swarms
+   ============================================================================= */
+
+.swarm-dashboard {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.swarm-dashboard-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 32px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.swarm-dashboard-header h2 {
+  margin: 0;
+  font-size: 16px;
+  color: var(--text-emphasis);
+  font-weight: 500;
+}
+
+.swarm-dashboard-content {
+  flex: 1;
+  padding: 24px 32px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  background: var(--bg-content);
+}
+
+/* Project card — each project with workers gets one of these */
+.swarm-project-card {
+  background: var(--bg-card);
+  border-radius: 8px;
+  padding: 20px 24px;
+  border: 1px solid var(--border-subtle);
+  border-left: 4px solid transparent;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
+}
+
+.swarm-project-card:hover {
+  background: var(--bg-panel);
+  border-color: var(--border-default);
+  transform: translateY(-1px);
+}
+
+.swarm-project-info {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.swarm-project-name {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-emphasis);
+}
+
+.swarm-project-path {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-family: monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.swarm-project-stats {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.swarm-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.swarm-stat-value {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.swarm-stat-value.running {
+  color: var(--cyan);
+}
+
+.swarm-stat-value.idle {
+  color: var(--text-muted);
+}
+
+.swarm-stat-divider {
+  width: 1px;
+  height: 16px;
+  background: var(--border-subtle);
+}
+
+.swarm-project-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.swarm-time-ago {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.swarm-open-btn {
+  padding: 8px 18px;
+  background: color-mix(in srgb, var(--violet) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--violet) 40%, transparent);
+  border-radius: 6px;
+  color: var(--violet-bright);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.swarm-open-btn:hover {
+  background: color-mix(in srgb, var(--violet) 25%, transparent);
+  border-color: var(--violet);
+  color: var(--violet-bright);
+}
+
+/* Running pulse on project cards with active workers */
+.swarm-project-card.has-running {
+  border-left-color: var(--cyan);
+}
+
+.swarm-project-card.has-running .swarm-project-name::after {
+  content: '';
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--cyan);
+  margin-left: 10px;
+  animation: pulse 1.5s infinite;
+  vertical-align: middle;
+}
+
+/* Swarm count badges */
+.swarm-worker-badges {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* Reuse state-badge from Gallery.css */

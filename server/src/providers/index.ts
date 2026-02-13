@@ -1,5 +1,5 @@
 /**
- * Provider abstraction for CLI tools (Claude, Codex, etc.)
+ * Provider abstraction for CLI tools (Claude, Codex, OpenCode, etc.)
  *
  * DESIGN PRINCIPLE: One clean path, no fallbacks, fail eagerly.
  *
@@ -31,6 +31,7 @@ import type { Provider as ProviderName, ModelInfo } from '@claude-web-view/share
 import type { SpawnOptionsWithoutStdio } from 'node:child_process';
 import claudeProvider from './claude';
 import codexProvider from './codex';
+import opencodeProvider from './opencode';
 
 // =============================================================================
 // Error Types
@@ -104,7 +105,7 @@ export type ProviderEvent =
  * 1. Create server/src/providers/{name}.ts implementing this interface
  * 2. Add to ProviderSchema in shared/src/index.ts: z.enum([..., '{name}'])
  * 3. Register in the providers record below
- * 4. Add persistence adapter if the agent doesn't self-persist (see codex-persistence.ts)
+ * 4. Add persistence adapter only if the agent does not self-persist sessions
  *
  * See docs/agent_client_spec.md for the full specification.
  */
@@ -125,7 +126,7 @@ export interface Provider {
    *
    * Examples:
    *   Claude 'opus'        → ['--model', 'opus']
-   *   Codex 'gpt-5.2-high' → ['-m', 'gpt-5.2', '-c', 'model_reasoning_effort=high']
+   *   Codex 'gpt-5.3-codex-high' → ['-m', 'gpt-5.3-codex', '-c', 'reasoning.effort=high']
    *
    * If modelId is undefined, returns [] (CLI uses its built-in default).
    */
@@ -208,11 +209,12 @@ export interface Provider {
 const providers: Record<ProviderName, Provider> = {
   claude: claudeProvider,
   codex: codexProvider,
+  opencode: opencodeProvider,
 };
 
 /**
  * Get a provider by name
- * @param name - Provider name ('claude' or 'codex')
+ * @param name - Provider name ('claude', 'codex', or 'opencode')
  * @throws Error if provider not found
  */
 export function getProvider(name: ProviderName): Provider {

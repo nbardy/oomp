@@ -188,6 +188,11 @@
   color: var(--cyan);
 }
 
+.provider-badge.provider-opencode {
+  background: color-mix(in srgb, var(--green) 20%, transparent);
+  color: var(--green);
+}
+
 .gallery-card-status {
   display: flex;
   align-items: center;
@@ -402,8 +407,129 @@
   transition: all 0.2s;
 }
 
+/* Done view header — back button + title */
+.gallery-done-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 32px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.gallery-done-header h2 {
+  margin: 0;
+  font-size: 16px;
+  color: var(--text-emphasis);
+  font-weight: 500;
+}
+
+.back-to-gallery-btn {
+  padding: 6px 14px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.2s;
+}
+
+.back-to-gallery-btn:hover {
+  background: var(--border-color);
+  color: var(--text-emphasis);
+}
+
 .undo-done-btn:hover {
   background: color-mix(in srgb, var(--green) 20%, transparent);
   border-color: var(--green);
   color: var(--green);
+}
+
+/* =============================================================================
+   Worker Conversations Section — oompa-spawned conversations (violet accent)
+   ============================================================================= */
+
+.worker-sessions-section {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px dashed var(--border-subtle);
+}
+
+.worker-sessions-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 12px 16px;
+  background: transparent;
+  border: 1px dashed var(--border-subtle);
+  border-radius: 8px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.2s;
+  text-align: left;
+}
+
+.worker-sessions-toggle:hover {
+  background: var(--bg-tertiary);
+  border-color: var(--violet);
+  color: var(--text-primary);
+}
+
+.worker-sessions-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* Worker project sections — violet accent, slightly dimmed */
+.worker-project .project-header {
+  background: var(--bg-tertiary);
+  border: 1px dashed var(--border-subtle);
+  border-left: 4px solid var(--violet);
+  opacity: 0.85;
+}
+
+.worker-project .project-path {
+  color: var(--text-secondary);
+}
+
+.worker-project .project-count {
+  color: var(--violet-bright);
+  background: var(--violet-glow);
+  border-color: color-mix(in srgb, var(--violet) 35%, transparent);
+}
+
+/* Worker card — slightly dimmed */
+.gallery-card.worker-card {
+  opacity: 0.75;
+}
+
+.gallery-card.worker-card:hover {
+  opacity: 1;
+}
+
+/* Worker provider badge — violet */
+.provider-badge.provider-worker {
+  background: color-mix(in srgb, var(--violet) 20%, transparent);
+  color: var(--violet);
+}
+
+/* Promote button on worker cards */
+.promote-worker-btn {
+  padding: 3px 10px;
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.promote-worker-btn:hover {
+  background: color-mix(in srgb, var(--violet) 20%, transparent);
+  border-color: var(--violet);
+  color: var(--violet);
 }

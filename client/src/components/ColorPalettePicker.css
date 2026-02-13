@@ -1,10 +1,16 @@
+/* =============================================================================
+   ColorPalettePicker.css — Palette picker overlay with full token visualization.
+   Shows all 60+ derived tokens (accent families, bg elevation, text, borders,
+   semantic roles, message tints) so you see exactly what a palette produces.
+   ============================================================================= */
+
 .palette-picker-overlay {
   position: fixed;
   top: 0;
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.6);
+  background: color-mix(in srgb, black 60%, transparent);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -17,12 +23,12 @@
   border: 1px solid var(--border-default);
   border-radius: 12px;
   width: 100%;
-  max-width: 800px;
+  max-width: 920px;
   max-height: 90vh;
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 20px 50px color-mix(in srgb, black 40%, transparent);
 }
 
 .palette-picker-header {
@@ -64,22 +70,26 @@
   display: flex;
   gap: 20px;
   padding: 20px;
-  overflow-y: auto;
+  overflow: hidden;
   flex: 1;
+  min-height: 0;
 }
+
+/* ─── Left: palette list ─── */
 
 .palette-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   min-width: 200px;
+  overflow-y: auto;
 }
 
 .palette-option {
   display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
   background: transparent;
   border: 1px solid transparent;
   border-radius: 8px;
@@ -97,30 +107,76 @@
   border-color: var(--accent-primary);
 }
 
+/* Mini swatches: show all 8 accents as a strip */
 .palette-swatches {
   display: flex;
-  gap: 3px;
+  gap: 2px;
 }
 
 .mini-swatch {
-  width: 16px;
-  height: 16px;
-  border-radius: 3px;
+  width: 14px;
+  height: 14px;
+  border-radius: 2px;
 }
 
 .palette-name {
   color: var(--text-primary);
-  font-size: 14px;
+  font-size: 12px;
 }
+
+.palette-list-divider {
+  height: 1px;
+  background: var(--border-default);
+  margin: 4px 0;
+}
+
+.ai-generate-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: transparent;
+  border: 1px dashed var(--border-default);
+  border-radius: 8px;
+  color: var(--text-muted);
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.ai-generate-btn:hover,
+.ai-generate-btn.active {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+  background: var(--bg-content);
+}
+
+.ai-sparkle {
+  font-size: 16px;
+}
+
+/* ─── Right: preview + token sections ─── */
 
 .palette-preview-section {
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  min-height: 0;
+  overflow: hidden;
 }
 
-/* Chat Preview */
+.preview-scroll {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-right: 8px;
+}
+
+/* ─── Chat Preview ─── */
+
 .chat-preview {
   border: 1px solid;
   border-radius: 8px;
@@ -182,114 +238,138 @@
   font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
 }
 
-/* Color Grid */
-.color-grid {
-  display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 8px;
+/* ─── Section groups (accent families, bg, text, etc.) ─── */
+
+.section-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
-.color-brick {
+.section-title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-emphasis);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.section-subtitle {
+  margin: 0;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+/* ─── Accent strips: dim → base → bright → glow per color ─── */
+
+.accent-strips {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 8px;
+}
+
+.accent-strip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.strip-label {
+  width: 60px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  text-transform: capitalize;
+  text-align: right;
+}
+
+.strip-swatches {
+  display: flex;
+  gap: 3px;
+  flex: 1;
+}
+
+.strip-swatch {
+  flex: 1;
+  height: 24px;
+  border-radius: 4px;
+}
+
+.strip-swatch-base {
+  border: 1px solid color-mix(in srgb, white 20%, transparent);
+}
+
+.strip-swatch-glow {
+  /* Glow swatches show alpha channel — checkerboard bg would be ideal
+     but a solid dark bg with the transparent overlay works well enough */
+}
+
+/* ─── Color ramp (bg elevation, text, borders, message tints) ─── */
+
+.color-ramp {
+  display: flex;
+  gap: 4px;
+}
+
+.ramp-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  align-items: center;
+}
+
+.ramp-swatch {
+  width: 100%;
+  height: 28px;
+  border-radius: 4px;
+}
+
+.ramp-label {
+  font-size: 9px;
+  color: var(--text-muted);
+  text-align: center;
+  line-height: 1.2;
+}
+
+/* ─── Semantic role map ─── */
+
+.semantic-map {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.semantic-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
   background: var(--bg-content);
   border-radius: 6px;
 }
 
-.color-swatch {
-  width: 100%;
-  height: 32px;
-  border-radius: 4px;
+.semantic-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
 }
 
-.color-label {
+.semantic-label {
   font-size: 11px;
   font-weight: 500;
   color: var(--text-primary);
 }
 
-.color-hex {
+.semantic-accent {
   font-size: 10px;
-  font-family: 'Menlo', 'Monaco', monospace;
   color: var(--text-muted);
+  font-family: monospace;
 }
 
-/* Footer */
-.palette-picker-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-  padding: 16px 20px;
-  border-top: 1px solid var(--border-default);
-}
+/* ─── AI input section ─── */
 
-.cancel-btn,
-.save-btn {
-  padding: 10px 20px;
-  border-radius: 6px;
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.cancel-btn {
-  background: transparent;
-  border: 1px solid var(--border-default);
-  color: var(--text-muted);
-}
-
-.cancel-btn:hover {
-  background: var(--bg-content);
-  color: var(--text-primary);
-}
-
-.save-btn {
-  background: var(--accent-primary);
-  border: none;
-  color: var(--text-on-accent);
-}
-
-.save-btn:hover {
-  opacity: 0.9;
-}
-
-/* Palette list divider + AI Generate button */
-.palette-list-divider {
-  height: 1px;
-  background: var(--border-default);
-  margin: 4px 0;
-}
-
-.ai-generate-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 10px 12px;
-  background: transparent;
-  border: 1px dashed var(--border-default);
-  border-radius: 8px;
-  color: var(--text-muted);
-  font-size: 14px;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.ai-generate-btn:hover,
-.ai-generate-btn.active {
-  border-color: var(--accent-primary);
-  color: var(--accent-primary);
-  background: var(--bg-content);
-}
-
-.ai-sparkle {
-  font-size: 16px;
-}
-
-/* AI input section — replaces preview when in AI mode */
 .ai-input-section {
   display: flex;
   flex-direction: column;
@@ -355,7 +435,6 @@
   cursor: not-allowed;
 }
 
-/* Loading dots animation */
 .ai-generating {
   display: inline-flex;
   align-items: center;
@@ -382,7 +461,49 @@
   border: 1px solid color-mix(in srgb, var(--accent-error) 20%, transparent);
 }
 
-/* Responsive */
+/* ─── Footer ─── */
+
+.palette-picker-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 16px 20px;
+  border-top: 1px solid var(--border-default);
+}
+
+.cancel-btn,
+.save-btn {
+  padding: 10px 20px;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.cancel-btn {
+  background: transparent;
+  border: 1px solid var(--border-default);
+  color: var(--text-muted);
+}
+
+.cancel-btn:hover {
+  background: var(--bg-content);
+  color: var(--text-primary);
+}
+
+.save-btn {
+  background: var(--accent-primary);
+  border: none;
+  color: var(--text-on-accent);
+}
+
+.save-btn:hover {
+  opacity: 0.9;
+}
+
+/* ─── Responsive ─── */
+
 @media (max-width: 700px) {
   .palette-picker-content {
     flex-direction: column;
@@ -394,7 +515,16 @@
     min-width: auto;
   }
 
-  .color-grid {
-    grid-template-columns: repeat(3, 1fr);
+  .palette-option {
+    flex: 0 0 auto;
+  }
+
+  .color-ramp {
+    flex-wrap: wrap;
+  }
+
+  .ramp-item {
+    flex: 0 0 auto;
+    width: 48px;
   }
 }

@@ -319,7 +319,7 @@ const handleSubmit = () => {
 
 ### 2. Provider Pattern for CLI Agents
 
-All CLI agent integrations (Claude, Codex) implement the `Provider` interface in `server/src/providers/index.ts`.
+All CLI agent integrations (Claude, Codex, OpenCode) implement the `Provider` interface in `server/src/providers/index.ts`.
 
 **Two usage modes**:
 1. **Conversation mode**: `getSpawnConfig()` + `parseOutput()` + `formatInput()` for stateful streaming sessions
@@ -371,7 +371,8 @@ npm run build -- --analyze
 
 ## When to Move to a Database
 
-**Currently**: localStorage for UI state, JSONL files for conversation history
+**Currently**: localStorage for UI state, provider-native files for conversation history
+ (Claude/Codex JSONL + OpenCode storage message/part files)
 
 **Consider a DB when**:
 - 10,000+ conversations (localStorage size limits)

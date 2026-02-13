@@ -31,6 +31,8 @@ interface Props {
   onConfirm?: () => void;
   /** Auto-focus the input on mount. */
   autoFocus?: boolean;
+  /** Called when path validity changes (exists and is a directory). */
+  onValidationChange?: (isValid: boolean) => void;
 }
 
 /** Check if a path looks like a valid new directory (absolute or ~/..., with a name after the last /). */
@@ -62,14 +64,17 @@ export function PathAutocomplete({
   onClearDefault,
   onConfirm,
   autoFocus = false,
+  onValidationChange,
 }: Props) {
   const [fsSuggestions, setFsSuggestions] = useState<PathEntry[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
+  const [isValidPath, setIsValidPath] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const validationDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Auto-focus and select all text on mount when autoFocus is true
   useEffect(() => {
@@ -128,6 +133,53 @@ export function PathAutocomplete({
       setIsLoading(false);
     }
   }, []);
+
+  // Validate if the current path exists and is a directory
+  const validatePath = useCallback(
+    async (pathToValidate: string) => {
+      const trimmed = pathToValidate.trim();
+      if (!trimmed) {
+        setIsValidPath(true);
+        onValidationChange?.(true);
+        return;
+      }
+
+      // Must look like a valid path
+      if (!trimmed.startsWith('/') && !trimmed.startsWith('~')) {
+        setIsValidPath(false);
+        onValidationChange?.(false);
+        return;
+      }
+
+      try {
+        const response = await fetch(`/api/validate-path?path=${encodeURIComponent(trimmed)}`);
+        const data = (await response.json()) as { valid: boolean; error?: string };
+        setIsValidPath(data.valid);
+        onValidationChange?.(data.valid);
+      } catch {
+        setIsValidPath(false);
+        onValidationChange?.(false);
+      }
+    },
+    [onValidationChange]
+  );
+
+  // Debounced validation when value changes
+  useEffect(() => {
+    if (validationDebounceRef.current) {
+      clearTimeout(validationDebounceRef.current);
+    }
+
+    validationDebounceRef.current = setTimeout(() => {
+      validatePath(value);
+    }, 300);
+
+    return () => {
+      if (validationDebounceRef.current) {
+        clearTimeout(validationDebounceRef.current);
+      }
+    };
+  }, [value, validatePath]);
 
   // Debounced fetch when value changes.
   // Skip filesystem fetch for non-path queries (e.g. "webviewe") — only fuzzy matches apply.
@@ -302,7 +354,7 @@ export function PathAutocomplete({
         <input
           ref={inputRef}
           type="text"
-          className="path-input"
+          className={`path-input ${!isValidPath && value.trim() ? 'path-input-invalid' : ''}`}
           value={value}
           onChange={handleInputChange}
           onFocus={handleInputFocus}
@@ -313,6 +365,9 @@ export function PathAutocomplete({
         />
         {isLoading && <span className="path-loading-indicator" />}
       </div>
+      {!isValidPath && value.trim() && (
+        <div className="path-validation-error">Directory not found</div>
+      )}
 
       {showSuggestions && totalCount > 0 && (
         <div className="path-suggestions">
@@ -327,7 +382,16 @@ export function PathAutocomplete({
                 onMouseEnter={() => setSelectedIndex(index)}
               >
                 <span className="path-recent-icon">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
                     <circle cx="12" cy="12" r="10" />
                     <polyline points="12 6 12 12 16 14" />
                   </svg>
@@ -358,7 +422,16 @@ export function PathAutocomplete({
                 onMouseEnter={() => setSelectedIndex(combinedIndex)}
               >
                 <span className="path-folder-icon">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
                     <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
                   </svg>
                 </span>
@@ -378,7 +451,16 @@ export function PathAutocomplete({
               onClick={handleCreateFolder}
             >
               <span className="path-create-icon">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
                   <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
                   <line x1="12" y1="11" x2="12" y2="17" />
                   <line x1="9" y1="14" x2="15" y2="14" />

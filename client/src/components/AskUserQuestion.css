@@ -1,0 +1,88 @@
+/* =============================================================================
+ * AskUserQuestion Widget
+ *
+ * Renders Claude's AskUserQuestion tool as interactive cards with selectable
+ * options. Uses the project's semantic color tokens (never --pal-* directly).
+ * ============================================================================= */
+
+.ask-user-question {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 12px 0;
+}
+
+.ask-question-card {
+  background: var(--bg-content);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 14px 16px;
+}
+
+.ask-question-header {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--cyan);
+  background: var(--cyan-dim);
+  padding: 2px 8px;
+  border-radius: 4px;
+  margin-bottom: 8px;
+}
+
+.ask-question-text {
+  margin: 0 0 10px 0;
+  font-size: 13px;
+  color: var(--text-emphasis);
+  line-height: 1.5;
+}
+
+.ask-question-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ask-question-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 10px 14px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+
+.ask-question-option:hover {
+  border-color: var(--cyan-dim);
+  background: color-mix(in srgb, var(--cyan) 5%, var(--bg-secondary));
+}
+
+.ask-question-option.selected {
+  border-color: var(--cyan);
+  background: var(--cyan-dim);
+  box-shadow: 0 0 0 1px var(--cyan-glow);
+}
+
+.ask-question-option .option-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-emphasis);
+}
+
+.ask-question-option .option-description {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.ask-question-option.selected .option-label {
+  color: var(--cyan-bright);
+}

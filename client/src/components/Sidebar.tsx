@@ -1,12 +1,20 @@
-import type { ModelId, ModelInfo, Provider } from '@claude-web-view/shared';
+import type { Conversation, ModelId, ModelInfo, Provider } from '@claude-web-view/shared';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useConversationStore } from '../stores/conversationStore';
 import { useUIStore } from '../stores/uiStore';
-import { formatTimeAgo, getLastMessageTime, getMinutesElapsed } from '../utils/time';
 import { getProjectColor } from '../utils/projectColors';
+import { formatTimeAgo, getLastMessageTime, getMinutesElapsed } from '../utils/time';
 import { PathAutocomplete } from './PathAutocomplete';
 import './Sidebar.css';
+
+const RECENT_CUTOFF_MS = 48 * 60 * 60 * 1000;
+
+interface FolderGroup {
+  directory: string;
+  conversations: Conversation[];
+  lastMessageTime: number;
+}
 
 /**
  * Exponential decay for time-ago text brightness.
@@ -33,6 +41,11 @@ export function Sidebar() {
   const doneConversations = useUIStore((s) => s.doneConversations);
   const markDone = useUIStore((s) => s.markDone);
   const hasUnseenMessages = useUIStore((s) => s.hasUnseenMessages);
+  const promotedWorkers = useUIStore((s) => s.promotedWorkers);
+  const sidebarViewMode = useUIStore((s) => s.sidebarViewMode);
+  const setSidebarViewMode = useUIStore((s) => s.setSidebarViewMode);
+  const galleryCollapsedProjects = useUIStore((s) => s.galleryCollapsedProjects);
+  const toggleGalleryCollapsed = useUIStore((s) => s.toggleGalleryCollapsed);
 
   // Tick every 30s to keep time-ago displays current
   const [, setTick] = useState(0);
@@ -40,6 +53,8 @@ export function Sidebar() {
     const id = setInterval(() => setTick((t) => t + 1), 30_000);
     return () => clearInterval(id);
   }, []);
+
+  const promotedSet = useMemo(() => new Set(promotedWorkers), [promotedWorkers]);
 
   // Sort conversations by most recent message (latest first), fallback to createdAt
   const sortedConversations = useMemo(() => {
@@ -49,6 +64,81 @@ export function Sidebar() {
       return bTime - aTime;
     });
   }, [conversations]);
+
+  const visibleConversations = useMemo(
+    () =>
+      sortedConversations.filter(
+        (conv) =>
+          !doneConversations.includes(conv.id) &&
+          // Hide workers unless promoted to main view
+          !(conv.isWorker && !promotedSet.has(conv.id))
+      ),
+    [sortedConversations, doneConversations, promotedSet]
+  );
+
+  const conversationIds = useMemo(() => new Set(conversations.keys()), [conversations]);
+
+  const topLevelConversations = useMemo(
+    () =>
+      visibleConversations.filter(
+        (conv) => !(conv.parentConversationId && conversationIds.has(conv.parentConversationId))
+      ),
+    [visibleConversations, conversationIds]
+  );
+
+  // Grouped view: split conversations into recent (48h, by folder) + older (flat)
+  const { recentGroups, olderConversations } = useMemo(() => {
+    if (sidebarViewMode !== 'grouped') {
+      return { recentGroups: [] as FolderGroup[], olderConversations: [] as Conversation[] };
+    }
+
+    const now = Date.now();
+    const recentMap = new Map<string, Conversation[]>();
+    const older: Conversation[] = [];
+
+    for (const conv of topLevelConversations) {
+      const lastTime = getLastMessageTime(conv.messages);
+      const isRecent = lastTime && (now - lastTime.getTime()) < RECENT_CUTOFF_MS;
+
+      if (isRecent) {
+        const existing = recentMap.get(conv.workingDirectory);
+        if (existing) {
+          existing.push(conv);
+        } else {
+          recentMap.set(conv.workingDirectory, [conv]);
+        }
+      } else {
+        older.push(conv);
+      }
+    }
+
+    const groups: FolderGroup[] = Array.from(recentMap.entries()).map(([directory, convs]) => ({
+      directory,
+      conversations: convs,
+      lastMessageTime: Math.max(...convs.map(c => getLastMessageTime(c.messages)?.getTime() ?? 0)),
+    }));
+    groups.sort((a, b) => b.lastMessageTime - a.lastMessageTime);
+
+    return { recentGroups: groups, olderConversations: older };
+  }, [topLevelConversations, sidebarViewMode]);
+
+  const collapsedSet = useMemo(() => new Set(galleryCollapsedProjects), [galleryCollapsedProjects]);
+
+  // Count active workers (isRunning && isWorker && not promoted) for the sidebar nav button
+  const activeWorkerCount = useMemo(() => {
+    let count = 0;
+    for (const conv of conversations.values()) {
+      if (conv.isWorker && !promotedSet.has(conv.id) && conv.isRunning) count++;
+    }
+    return count;
+  }, [conversations, promotedSet]);
+
+  const hasWorkers = useMemo(() => {
+    for (const conv of conversations.values()) {
+      if (conv.isWorker && !promotedSet.has(conv.id)) return true;
+    }
+    return false;
+  }, [conversations, promotedSet]);
 
   // Deduplicated working directories from all conversations — fed to PathAutocomplete for fuzzy matching
   const recentDirectories = useMemo(() => {
@@ -62,6 +152,7 @@ export function Sidebar() {
   const [showPicker, setShowPicker] = useState(false);
   const [directory, setDirectory] = useState('');
   const [hasPendingDefault, setHasPendingDefault] = useState(false);
+  const [isDirectoryValid, setIsDirectoryValid] = useState(true);
   const [provider, setProvider] = useState<Provider>('claude');
   const [model, setModel] = useState<ModelId | undefined>(undefined);
   const [models, setModels] = useState<ModelInfo[]>([]);
@@ -83,10 +174,7 @@ export function Sidebar() {
     // Default to the most recently active conversation's working directory,
     // then uiStore fallback, then server cwd.
     const latestConv = sortedConversations[0];
-    const lastDir = latestConv?.workingDirectory
-      ?? lastWorkingDirectory
-      ?? defaultCwd
-      ?? '/';
+    const lastDir = latestConv?.workingDirectory ?? lastWorkingDirectory ?? defaultCwd ?? '/';
     setDirectory(lastDir);
     setHasPendingDefault(true);
     setShowPicker(true);
@@ -141,6 +229,25 @@ export function Sidebar() {
           <span>◫</span>
           <span>Gallery</span>
         </button>
+        {doneConversations.length > 0 && (
+          <button type="button" className="done-nav-btn" onClick={() => navigate('/done')}>
+            Done ({doneConversations.length})
+          </button>
+        )}
+        {hasWorkers && (
+          <>
+            <button type="button" className="workers-nav-btn" onClick={() => navigate('/workers')}>
+              Workers{activeWorkerCount > 0 ? ` (${activeWorkerCount})` : ''}
+            </button>
+            <button
+              type="button"
+              className="analytics-nav-btn"
+              onClick={() => navigate('/workers/analytics')}
+            >
+              Analytics
+            </button>
+          </>
+        )}
         <button type="button" className="new-chat-btn" onClick={handleNewConversation}>
           <span>+</span>
           <span>New Conversation</span>
@@ -161,6 +268,7 @@ export function Sidebar() {
                 hasPendingDefault={hasPendingDefault}
                 onClearDefault={() => setHasPendingDefault(false)}
                 onConfirm={handleConfirm}
+                onValidationChange={setIsDirectoryValid}
                 autoFocus
               />
               <label className="new-conv-label">Provider</label>
@@ -185,14 +293,21 @@ export function Sidebar() {
                   />
                   Codex
                 </label>
+                <label className={`provider-option ${provider === 'opencode' ? 'selected' : ''}`}>
+                  <input
+                    type="radio"
+                    name="provider"
+                    value="opencode"
+                    checked={provider === 'opencode'}
+                    onChange={() => setProvider('opencode')}
+                  />
+                  OpenCode
+                </label>
               </div>
               <label className="new-conv-label">Model</label>
               <div className="model-selector">
                 {models.map((m) => (
-                  <label
-                    key={m.id}
-                    className={`model-option ${model === m.id ? 'selected' : ''}`}
-                  >
+                  <label key={m.id} className={`model-option ${model === m.id ? 'selected' : ''}`}>
                     <input
                       type="radio"
                       name="model"
@@ -207,17 +322,30 @@ export function Sidebar() {
               <div className="directory-actions">
                 <button
                   type="button"
-                  className="dir-action-btn dir-cancel-btn"
-                  onClick={handleCancel}
+                  className="dir-action-btn dir-confirm-btn"
+                  onClick={handleConfirm}
+                  disabled={wsStatus !== 'connected' || !isDirectoryValid}
+                  title={
+                    wsStatus !== 'connected'
+                      ? 'Server disconnected'
+                      : !isDirectoryValid
+                        ? 'Invalid directory'
+                        : 'Create conversation (Shift+Enter)'
+                  }
                 >
-                  Cancel
+                  Create
+                  <kbd className="btn-shortcut">⇧↵</kbd>
                 </button>
                 <button
                   type="button"
                   className="dir-action-btn dir-confirm-btn"
                   onClick={handleConfirm}
                   disabled={wsStatus !== 'connected'}
-                  title={wsStatus !== 'connected' ? 'Server disconnected' : 'Create conversation (Shift+Enter)'}
+                  title={
+                    wsStatus !== 'connected'
+                      ? 'Server disconnected'
+                      : 'Create conversation (Shift+Enter)'
+                  }
                 >
                   Create
                   <kbd className="btn-shortcut">⇧↵</kbd>
@@ -227,66 +355,179 @@ export function Sidebar() {
           </div>
         )}
 
-        <div className="ws-status">
-          <span className={`status-dot ${wsStatus}`} />
-          {wsStatus}
+        <div className="sidebar-status-row">
+          <div className="ws-status">
+            <span className={`status-dot ${wsStatus}`} />
+            {wsStatus}
+          </div>
+          <div className="view-mode-toggle">
+            <button
+              type="button"
+              className={`view-mode-btn ${sidebarViewMode === 'grouped' ? 'active' : ''}`}
+              onClick={() => setSidebarViewMode('grouped')}
+              title="Grouped by folder"
+            >
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                <rect x="1" y="1" width="12" height="3" rx="1" fill="currentColor" opacity="0.5" />
+                <rect x="3" y="5.5" width="10" height="2" rx="0.5" fill="currentColor" />
+                <rect x="3" y="8.5" width="10" height="2" rx="0.5" fill="currentColor" />
+                <rect x="1" y="11.5" width="12" height="1.5" rx="0.5" fill="currentColor" opacity="0.5" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              className={`view-mode-btn ${sidebarViewMode === 'list' ? 'active' : ''}`}
+              onClick={() => setSidebarViewMode('list')}
+              title="Flat list"
+            >
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                <rect x="1" y="1" width="12" height="2" rx="0.5" fill="currentColor" />
+                <rect x="1" y="4.5" width="12" height="2" rx="0.5" fill="currentColor" />
+                <rect x="1" y="8" width="12" height="2" rx="0.5" fill="currentColor" />
+                <rect x="1" y="11.5" width="12" height="2" rx="0.5" fill="currentColor" />
+              </svg>
+            </button>
+          </div>
         </div>
       </div>
 
       <div className="conversations-list">
-        {sortedConversations.filter((conv) => !doneConversations.includes(conv.id)).map((conv) => {
-          const isActive = conv.id === activeConversationId;
-          const projectColor = getProjectColor(conv.workingDirectory);
-          const dirDisplay = conv.workingDirectory.replace(/^\/Users\/[^/]+/, '~');
-          // Show just the last folder name as a short badge label
-          const folderName = conv.workingDirectory.split('/').filter(Boolean).pop() ?? dirDisplay;
-          const preview =
-            conv.messages.length > 0
-              ? `${conv.messages[conv.messages.length - 1].content.substring(0, 50)}...`
-              : 'New conversation';
-
-          const lastTime = getLastMessageTime(conv.messages);
-          const timeAgo = lastTime ? formatTimeAgo(lastTime) : null;
-          const timeColor = lastTime ? timeAgoColor(getMinutesElapsed(lastTime)) : undefined;
-          // NEW Badge Feature: Show badge if user hasn't seen the latest messages.
-          // Data layer fix is in conversationStore.ts:_handleMessage — new messages for the
-          // active conversation are immediately marked seen. No view-layer masking here;
-          // if badge shows on active conversation, that's a bug to fix at the source.
-          const hasUnseen = hasUnseenMessages(conv.id, conv.messages.length);
-
-          return (
-            <div
+        {sidebarViewMode === 'list' ? (
+          topLevelConversations.map((conv) => (
+            <ConversationItem
               key={conv.id}
-              className={`conversation-item ${isActive ? 'active' : ''}`}
-              onClick={() => handleSelectConversation(conv.id)}
-              style={{ borderLeftColor: projectColor }}
-            >
-              <div className="conversation-header">
-                <span
-                  className="folder-badge"
-                  style={{ background: `color-mix(in srgb, ${projectColor} 25%, transparent)`, color: projectColor }}
-                  title={dirDisplay}
-                >
-                  {folderName}
-                </span>
-                <div className="conversation-header-right">
-                  {hasUnseen && <span className="new-badge">NEW</span>}
-                  {timeAgo && <span className="conversation-time-ago" style={{ color: timeColor }}>{timeAgo}</span>}
-                  <div className={`status-indicator ${conv.isRunning ? 'running' : ''}`} />
-                </div>
+              conv={conv}
+              isActive={conv.id === activeConversationId}
+              hasUnseen={hasUnseenMessages(conv.id, conv.messages.length)}
+              showFolderBadge
+              onSelect={handleSelectConversation}
+              onDone={handleDone}
+            />
+          ))
+        ) : (
+          <>
+            {recentGroups.length > 0 && (
+              <div className="sidebar-section">
+                <div className="sidebar-section-header">Recent Projects</div>
+                {recentGroups.map((group) => {
+                  const isCollapsed = collapsedSet.has(group.directory);
+                  const dirDisplay = group.directory.replace(/^\/Users\/[^/]+/, '~');
+                  const projectColor = getProjectColor(group.directory);
+
+                  return (
+                    <div key={group.directory} className="folder-group">
+                      <div
+                        className="folder-group-header"
+                        onClick={() => toggleGalleryCollapsed(group.directory)}
+                        style={{ borderLeftColor: projectColor }}
+                      >
+                        <span className={`folder-chevron ${isCollapsed ? 'collapsed' : ''}`}>
+                          &#x25BC;
+                        </span>
+                        <span className="folder-group-name" title={group.directory}>
+                          {dirDisplay}
+                        </span>
+                        <span className="folder-group-count">
+                          {group.conversations.length}
+                        </span>
+                      </div>
+                      {!isCollapsed && group.conversations.map((conv) => (
+                        <ConversationItem
+                          key={conv.id}
+                          conv={conv}
+                          isActive={conv.id === activeConversationId}
+                          hasUnseen={hasUnseenMessages(conv.id, conv.messages.length)}
+                          showFolderBadge={false}
+                          onSelect={handleSelectConversation}
+                          onDone={handleDone}
+                        />
+                      ))}
+                    </div>
+                  );
+                })}
               </div>
-              <div className="conversation-preview">{preview}</div>
-              <button
-                type="button"
-                className="done-btn"
-                onClick={(e) => handleDone(conv.id, e)}
-              >
-                Done
-              </button>
-            </div>
-          );
-        })}
+            )}
+
+            {olderConversations.length > 0 && (
+              <div className="sidebar-section">
+                <div className="sidebar-section-header">Older</div>
+                {olderConversations.map((conv) => (
+                  <ConversationItem
+                    key={conv.id}
+                    conv={conv}
+                    isActive={conv.id === activeConversationId}
+                    hasUnseen={hasUnseenMessages(conv.id, conv.messages.length)}
+                    showFolderBadge
+                    onSelect={handleSelectConversation}
+                    onDone={handleDone}
+                  />
+                ))}
+              </div>
+            )}
+          </>
+        )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Extracted conversation item — avoids duplicating JSX across list/grouped modes.
+ * showFolderBadge=false in grouped mode since the folder header already shows the path.
+ */
+function ConversationItem({ conv, isActive, hasUnseen, showFolderBadge, onSelect, onDone }: {
+  conv: Conversation;
+  isActive: boolean;
+  hasUnseen: boolean;
+  showFolderBadge: boolean;
+  onSelect: (id: string) => void;
+  onDone: (id: string, e: React.MouseEvent) => void;
+}) {
+  const projectColor = getProjectColor(conv.workingDirectory);
+  const dirDisplay = conv.workingDirectory.replace(/^\/Users\/[^/]+/, '~');
+  const folderName = conv.workingDirectory.split('/').filter(Boolean).pop() ?? dirDisplay;
+  const preview =
+    conv.messages.length > 0
+      ? conv.messages[conv.messages.length - 1].content.substring(0, 120)
+      : 'New conversation';
+
+  const lastTime = getLastMessageTime(conv.messages);
+  const timeAgo = lastTime ? formatTimeAgo(lastTime) : null;
+  const timeColor = lastTime ? timeAgoColor(getMinutesElapsed(lastTime)) : undefined;
+
+  return (
+    <div
+      className={`conversation-item ${isActive ? 'active' : ''}`}
+      onClick={() => onSelect(conv.id)}
+      style={{ borderLeftColor: projectColor }}
+    >
+      <div className={`conversation-header ${showFolderBadge ? '' : 'no-badge'}`}>
+        {showFolderBadge && (
+          <span
+            className="folder-badge"
+            style={{
+              background: `color-mix(in srgb, ${projectColor} 25%, transparent)`,
+              color: projectColor,
+            }}
+            title={dirDisplay}
+          >
+            {folderName}
+          </span>
+        )}
+        <div className="conversation-header-right">
+          {hasUnseen && <span className="new-badge">NEW</span>}
+          {timeAgo && (
+            <span className="conversation-time-ago" style={{ color: timeColor }}>
+              {timeAgo}
+            </span>
+          )}
+          <div className={`status-indicator ${conv.isRunning ? 'running' : ''}`} />
+        </div>
+      </div>
+      <div className="conversation-preview">{preview}</div>
+      <button type="button" className="done-btn" onClick={(e) => onDone(conv.id, e)}>
+        Done
+      </button>
     </div>
   );
 }

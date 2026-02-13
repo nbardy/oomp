@@ -38,6 +38,27 @@
   color: var(--text-muted);
 }
 
+/* Invalid path state - red border */
+.path-input-invalid {
+  border-color: var(--red) !important;
+}
+
+.path-input-invalid:focus {
+  border-color: var(--red) !important;
+}
+
+/* Validation error message */
+.path-validation-error {
+  margin-top: 6px;
+  padding: 6px 10px;
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+  border: 1px solid var(--red);
+  border-radius: 4px;
+  color: var(--red);
+  font-size: 12px;
+  font-weight: 500;
+}
+
 /* Loading indicator - small spinning dot */
 .path-loading-indicator {
   position: absolute;

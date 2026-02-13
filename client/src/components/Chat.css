@@ -72,6 +72,11 @@
   color: var(--cyan);
 }
 
+.provider-badge.provider-opencode {
+  background: color-mix(in srgb, var(--green) 20%, transparent);
+  color: var(--green);
+}
+
 /* Wrapper for virtualized message list — contains the list + overlays */
 .messages-container-wrapper {
   flex: 1;
@@ -179,11 +184,20 @@
   box-shadow: inset 3px 0 15px -5px var(--cyan-glow), 0 2px 8px rgba(0, 0, 0, 0.15);
 }
 
-/* System / loop marker messages */
+/* System / loop marker messages — use derived --bg-system-message tint */
 .message.system .message-content {
-  background: transparent;
+  background: var(--bg-system-message);
   border: none;
-  padding: 4px 0;
+  border-left: 3px solid var(--accent-warning);
+  padding: 8px 14px;
+}
+
+/* Error messages — use derived --bg-error-message tint */
+.message.error .message-content {
+  background: var(--bg-error-message);
+  border: none;
+  border-left: 3px solid var(--accent-error);
+  padding: 8px 14px;
 }
 
 .message.loop-marker {
@@ -274,7 +288,7 @@
   font-family: inherit;
   resize: none;
   min-height: 44px;
-  max-height: 600px;
+  max-height: 300px;
   overflow-y: auto;
   line-height: 1.5;
 }
@@ -282,12 +296,15 @@
 .message-input:focus {
   outline: none;
   border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px var(--violet-glow);
 }
 
-/* Visual indicator when running — Enter interrupts, Tab queues */
+/* Visual indicator when running — Enter interrupts, Tab queues.
+   Red border + red glow makes the "danger zone" state unmistakable. */
 .message-input.interrupt-mode {
-  border-color: var(--red-base, #dc322f);
-  background: var(--bg-assistant-message);
+  border-color: var(--red);
+  background: var(--bg-error-message);
+  box-shadow: 0 0 0 2px var(--red-glow);
 }
 
 .send-btn {
@@ -308,11 +325,11 @@
 
 /* Interrupt mode styling for send button — red to signal destructive action */
 .send-btn.interrupt-mode {
-  background: var(--red-base, #dc322f);
+  background: var(--red);
 }
 
 .send-btn.interrupt-mode:hover {
-  background: var(--red-bright, #cb4b16);
+  background: var(--red-bright);
 }
 
 .send-btn:disabled,
@@ -806,6 +823,7 @@
 .message-content a {
   color: var(--blue);
   text-decoration: none;
+  cursor: pointer;
 }
 
 .message-content a:hover {

@@ -12,16 +12,28 @@
  * - Session IDs (thread_id) are UUIDs emitted in the thread.started event
  *
  * KNOWN OUTPUT TYPES from Codex CLI (--json mode):
+ *
+ * Top-level event types:
  * - {"type":"thread.started","thread_id":"..."} - Session created, thread_id for resume
  * - {"type":"turn.started"} - Model turn beginning
- * - {"type":"item.started","item":{"type":"command_execution","command":"...","status":"in_progress"}} - Command starting
- * - {"type":"item.completed","item":{"type":"reasoning","text":"..."}} - Internal reasoning (hidden)
- * - {"type":"item.completed","item":{"type":"agent_message","text":"..."}} - Response text
- * - {"type":"item.completed","item":{"type":"command_execution","command":"...","aggregated_output":"...","exit_code":0}} - Command result
- * - {"type":"item.completed","item":{"type":"file_change","changes":[...]}} - File modification
  * - {"type":"turn.completed","usage":{...}} - Turn done
+ * - {"type":"turn.failed","error":"..."} - Turn errored
+ * - {"type":"item.started","item":{...}} - Item beginning (command, mcp_tool_call, etc.)
+ * - {"type":"item.completed","item":{...}} - Item finished
+ * - {"type":"item.updated","item":{...}} - Item mid-flight update (streaming)
  *
- * Any other type throws ProviderParseError.
+ * Item types (inside item.started / item.completed / item.updated):
+ * - agent_message — Response text → text_delta
+ * - reasoning — Internal reasoning → hidden (message_start)
+ * - command_execution — Shell command → tool_use (NOT text_delta — aggregated_output can be huge)
+ * - file_change — File modification → tool_use
+ * - mcp_tool_call — MCP tool invocation → tool_use
+ * - web_search — Web search → tool_use
+ * - plan_update — Agent planning → hidden (message_start)
+ *
+ * Any unknown TOP-LEVEL type throws ProviderParseError.
+ * Unknown ITEM types log a warning and return message_start (Codex adds new item
+ * types frequently and crashing on them is worse than ignoring them).
  */
 
 import type { ModelInfo } from '@claude-web-view/shared';
@@ -103,7 +115,14 @@ interface CodexTurnCompleted {
 }
 
 // The top-level type discriminant
-type CodexTopLevelType = 'thread.started' | 'turn.started' | 'item.started' | 'item.completed' | 'turn.completed';
+type CodexTopLevelType =
+  | 'thread.started'
+  | 'turn.started'
+  | 'turn.completed'
+  | 'turn.failed'
+  | 'item.started'
+  | 'item.completed'
+  | 'item.updated';
 
 // Type guard for top-level message types
 function isCodexOutput(data: unknown): data is { type: CodexTopLevelType } {
@@ -112,10 +131,116 @@ function isCodexOutput(data: unknown): data is { type: CodexTopLevelType } {
   return (
     obj.type === 'thread.started' ||
     obj.type === 'turn.started' ||
+    obj.type === 'turn.completed' ||
+    obj.type === 'turn.failed' ||
     obj.type === 'item.started' ||
     obj.type === 'item.completed' ||
-    obj.type === 'turn.completed'
+    obj.type === 'item.updated'
   );
+}
+
+// =============================================================================
+// Command Classifier — extracts semantic action from raw shell commands
+//
+// Codex wraps everything in `/bin/zsh -lc "..."`. We parse through that
+// wrapper to identify the inner command and classify it as a human-readable
+// action with an emoji and the relevant filename.
+//
+// Examples:
+//   /bin/zsh -lc "sed -n '1,320p' train.py"    → 📖 train.py
+//   /bin/zsh -lc "cat src/index.ts"             → 📖 index.ts
+//   /bin/zsh -lc "python3 run.py"               → ▶️ run.py
+//   /bin/zsh -lc "sed -i '' 's/old/new/' f.ts"  → ✏️ f.ts
+// =============================================================================
+
+interface ClassifiedCommand {
+  emoji: string;
+  label: string;  // e.g. "train.py" or "python3 run.py"
+}
+
+/**
+ * Unwrap shell wrapper (e.g. `/bin/zsh -lc "..."`) and return inner command.
+ */
+function unwrapShell(cmd: string): string {
+  // Match: /bin/{sh,bash,zsh} -lc "..." or '...'
+  const match = cmd.match(/^\/bin\/(?:ba)?sh\s+-\w*c\s+(['"])(.*)\1$/s)
+    ?? cmd.match(/^\/bin\/zsh\s+-\w*c\s+(['"])(.*)\1$/s);
+  if (match) return match[2];
+  return cmd;
+}
+
+/**
+ * Extract just the filename (basename) from a path.
+ */
+function basename(filepath: string): string {
+  return filepath.split('/').pop() ?? filepath;
+}
+
+/**
+ * Classify a raw command into a semantic action with emoji.
+ */
+function classifyCommand(rawCommand: string): ClassifiedCommand {
+  const cmd = unwrapShell(rawCommand).trim();
+
+  // sed -n with only 'p' (print) = read
+  if (/^sed\s+-n\s/.test(cmd) && !/-i/.test(cmd)) {
+    const fileMatch = cmd.match(/['"]?\s+([\w./-]+)\s*$/);
+    if (fileMatch) return { emoji: '📖', label: basename(fileMatch[1]) };
+  }
+
+  // sed -i = edit
+  if (/^sed\s.*-i/.test(cmd)) {
+    const fileMatch = cmd.match(/([\w./-]+)\s*$/);
+    if (fileMatch) return { emoji: '✏️', label: basename(fileMatch[1]) };
+  }
+
+  // cat / head / tail / less / more = read
+  if (/^(?:cat|head|tail|less|more)\s/.test(cmd)) {
+    const fileMatch = cmd.match(/([\w./-]+)\s*$/);
+    if (fileMatch) return { emoji: '📖', label: basename(fileMatch[1]) };
+  }
+
+  // ls / find / tree = browse
+  if (/^(?:ls|find|tree)\s/.test(cmd)) {
+    return { emoji: '📂', label: cmd.split(/\s+/).slice(0, 3).join(' ') };
+  }
+
+  // grep / rg / ag = search
+  if (/^(?:grep|rg|ag)\s/.test(cmd)) {
+    return { emoji: '🔍', label: cmd.length > 40 ? cmd.substring(0, 37) + '...' : cmd };
+  }
+
+  // python / python3 / node / npm / npx / cargo / go = run
+  if (/^(?:\.?\.?\/|)(?:python3?|node|npm|npx|cargo|go|ruby|perl|java)\s/.test(cmd)) {
+    // Show command + first arg (usually the script)
+    const parts = cmd.split(/\s+/);
+    const script = parts[1] ? basename(parts[1]) : '';
+    return { emoji: '▶️', label: `${basename(parts[0])} ${script}`.trim() };
+  }
+
+  // pip / uv / npm install = install
+  if (/^(?:pip|uv|npm)\s+install/.test(cmd)) {
+    return { emoji: '📦', label: cmd.length > 40 ? cmd.substring(0, 37) + '...' : cmd };
+  }
+
+  // git = git
+  if (/^git\s/.test(cmd)) {
+    return { emoji: '🔀', label: cmd.length > 40 ? cmd.substring(0, 37) + '...' : cmd };
+  }
+
+  // mkdir / cp / mv / rm = file ops
+  if (/^(?:mkdir|cp|mv|rm)\s/.test(cmd)) {
+    const fileMatch = cmd.match(/([\w./-]+)\s*$/);
+    if (fileMatch) return { emoji: '📁', label: `${cmd.split(/\s+/)[0]} ${basename(fileMatch[1])}` };
+  }
+
+  // chmod / chown = permissions
+  if (/^(?:chmod|chown)\s/.test(cmd)) {
+    return { emoji: '🔒', label: cmd.length > 40 ? cmd.substring(0, 37) + '...' : cmd };
+  }
+
+  // Fallback: show truncated command
+  return { emoji: '⚡', label: cmd.length > 50 ? cmd.substring(0, 47) + '...' : cmd };
 }
 
 // =============================================================================
@@ -123,34 +248,47 @@ function isCodexOutput(data: unknown): data is { type: CodexTopLevelType } {
 // =============================================================================
 
 // Known effort levels for composite model ID decomposition.
-// Composite format: "{model}-{effort}" e.g. "gpt-5.2-high"
+// Composite format: "{model}-{effort}" e.g. "gpt-5.3-codex-high"
 // Matched as suffixes to avoid ambiguity with model names containing hyphens.
 const CODEX_EFFORT_LEVELS = ['medium', 'high', 'xhigh'] as const;
+
+// Models that are standalone (no effort decomposition). Pass directly via `-m`.
+// e.g. "gpt-5.3-codex-spark" → `-m gpt-5.3-codex-spark` (no effort config).
+const CODEX_STANDALONE_MODELS = new Set(['gpt-5.3-codex-spark']);
 
 const codexProvider: Provider = {
   name: 'codex',
 
   listModels(): ModelInfo[] {
     return [
-      { id: 'gpt-5.2-high', displayName: 'GPT-5.2 (High Effort)', isDefault: true },
-      { id: 'gpt-5.2-medium', displayName: 'GPT-5.2 (Medium Effort)', isDefault: false },
-      { id: 'gpt-5.2-xhigh', displayName: 'GPT-5.2 (Extra High Effort)', isDefault: false },
+      { id: 'gpt-5.3-codex-high', displayName: 'GPT-5.3 Codex (High Effort)', isDefault: true },
+      { id: 'gpt-5.3-codex-medium', displayName: 'GPT-5.3 Codex (Medium Effort)', isDefault: false },
+      { id: 'gpt-5.3-codex-xhigh', displayName: 'GPT-5.3 Codex (Extra High Effort)', isDefault: false },
+      { id: 'gpt-5.3-codex-spark', displayName: 'GPT-5.3 Codex Spark (Ultra-Fast)', isDefault: false },
+      { id: 'gpt-5.3-codex-spark-high', displayName: 'GPT-5.3 Codex Spark (High Effort)', isDefault: false },
+      { id: 'gpt-5.3-codex-spark-medium', displayName: 'GPT-5.3 Codex Spark (Medium Effort)', isDefault: false },
+      { id: 'gpt-5.3-codex-spark-xhigh', displayName: 'GPT-5.3 Codex Spark (Extra High Effort)', isDefault: false },
     ];
   },
 
   modelToParams(modelId?: string): string[] {
     if (!modelId) return [];
 
-    // Decompose composite ID: "gpt-5.2-high" → model="gpt-5.2", effort="high"
+    // Standalone models (e.g. spark) — pass directly, no effort decomposition.
+    if (CODEX_STANDALONE_MODELS.has(modelId)) {
+      return ['-m', modelId];
+    }
+
+    // Decompose composite ID: "gpt-5.3-codex-high" → model="gpt-5.3-codex", effort="high"
     // Split on the LAST segment matching a known effort level.
     for (const effort of CODEX_EFFORT_LEVELS) {
       if (modelId.endsWith(`-${effort}`)) {
         const model = modelId.slice(0, -(effort.length + 1));
-        return ['-m', model, '-c', `model_reasoning_effort=${effort}`];
+        return ['-m', model, '-c', `reasoning.effort=${effort}`];
       }
     }
 
-    throw new Error(`Invalid Codex model identifier: ${modelId}. Expected format: "model-effort" (e.g. gpt-5.2-high)`);
+    throw new Error(`Invalid Codex model identifier: ${modelId}. Expected format: "model-effort" (e.g. gpt-5.3-codex-high)`);
   },
 
   getSpawnConfig(sessionId: string, workingDir: string, resume = false, modelId?: string): SpawnConfig {
@@ -242,17 +380,26 @@ const codexProvider: Provider = {
         return { type: 'message_start' };
 
       case 'item.started': {
-        // Command execution beginning — show it inline
         const msg = json as CodexItemStarted;
         if (msg.item.type === 'command_execution' && msg.item.command) {
+          const { emoji, label } = classifyCommand(msg.item.command);
           return {
             type: 'tool_use',
             name: 'shell',
             input: { command: msg.item.command },
-            displayText: `\n[Running: ${msg.item.command}]\n`,
+            displayText: `${emoji} ${label}\n`,
           };
         }
-        // Other item.started types — no-op
+        if (msg.item.type === 'mcp_tool_call') {
+          const name = (msg.item as { name?: string }).name ?? 'mcp_tool';
+          return {
+            type: 'tool_use',
+            name,
+            input: {},
+            displayText: `\n[MCP: ${name}]\n`,
+          };
+        }
+        // Other item.started types (web_search, etc.) — no-op
         return { type: 'message_start' };
       }
 
@@ -272,49 +419,86 @@ const codexProvider: Provider = {
             return { type: 'message_start' };
 
           case 'command_execution': {
-            // Command completed — show output inline
+            // Command completed — item.started already showed the action.
+            // Only surface errors (non-zero exit). Success is silent.
             const cmdMsg = json as CodexItemCompletedCommand;
-            const output = cmdMsg.item.aggregated_output;
-            if (output) {
-              return { type: 'text_delta', text: `\n\`\`\`\n${output}\`\`\`\n` };
+            const exitCode = cmdMsg.item.exit_code;
+            if (exitCode !== 0) {
+              const { emoji, label } = classifyCommand(cmdMsg.item.command);
+              return {
+                type: 'tool_use',
+                name: 'shell',
+                input: { command: cmdMsg.item.command, exit_code: exitCode },
+                displayText: `${emoji} ${label} ❌ exit ${exitCode}\n`,
+              };
             }
-            return { type: 'message_start' };
+            // Success — no displayText, item.started already showed the action
+            return {
+              type: 'tool_use',
+              name: 'shell',
+              input: { command: cmdMsg.item.command, exit_code: 0 },
+            };
           }
 
           case 'file_change': {
-            // File modification — show what changed
+            // File modification — show emoji + filename per change
             const fileMsg = json as CodexItemCompletedFileChange;
-            const descriptions = fileMsg.item.changes.map(
-              (c) => `[${c.kind}: ${c.path}]`
-            );
+            const descriptions = fileMsg.item.changes.map((c) => {
+              const emoji = c.kind === 'create' ? '✍️' : c.kind === 'delete' ? '🗑️' : '✏️';
+              return `${emoji} ${basename(c.path)}`;
+            });
             return {
               type: 'tool_use',
               name: 'file_change',
               input: { changes: fileMsg.item.changes },
-              displayText: `\n${descriptions.join('\n')}\n`,
+              displayText: `${descriptions.join('\n')}\n`,
             };
           }
 
+          case 'mcp_tool_call': {
+            // MCP tool completed — show as tool_use with summary
+            const name = (msg.item as { name?: string }).name ?? 'mcp_tool';
+            return {
+              type: 'tool_use',
+              name,
+              input: {},
+              displayText: `[MCP completed: ${name}]\n`,
+            };
+          }
+
+          case 'web_search':
+            // Web search completed — show as tool_use
+            return {
+              type: 'tool_use',
+              name: 'web_search',
+              input: {},
+              displayText: `[Web search completed]\n`,
+            };
+
+          case 'plan_update':
+            // Agent planning — internal, don't show to user
+            return { type: 'message_start' };
+
           default:
-            throw new ProviderParseError(
-              'codex',
-              json,
-              `Unknown item.completed type: ${itemType}`
-            );
+            // Codex adds new item types frequently. Crashing on an unknown
+            // item type is worse than ignoring it — log and continue.
+            console.warn(`[codex] Unknown item.completed type: ${itemType}`);
+            return { type: 'message_start' };
         }
       }
 
       case 'turn.completed':
         return { type: 'message_complete' };
 
-      default: {
-        // Should be unreachable due to isCodexOutput guard
-        throw new ProviderParseError(
-          'codex',
-          json,
-          `Unhandled message type: ${(json as { type: string }).type}`
-        );
+      case 'turn.failed': {
+        // Turn errored — surface to user
+        const errMsg = (json as { error?: string }).error ?? 'Unknown error';
+        return { type: 'error', message: `Codex turn failed: ${errMsg}` };
       }
+
+      case 'item.updated':
+        // Mid-flight streaming update — no-op (we get the final in item.completed)
+        return { type: 'message_start' };
     }
   },
 };

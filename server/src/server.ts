@@ -1,28 +1,28 @@
-import express, { Request, Response } from 'express';
-import { WebSocketServer, WebSocket } from 'ws';
-import { spawn, ChildProcess, execSync } from 'node:child_process';
-import { v4 as uuidv4 } from 'uuid';
-import path from 'node:path';
+import { type ChildProcess, execSync, spawn } from 'node:child_process';
+import crypto from 'node:crypto';
+import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
-import os from 'node:os';
 import http from 'node:http';
 import net from 'node:net';
+import os from 'node:os';
+import path from 'node:path';
 import readline from 'node:readline';
-import { EventEmitter } from 'node:events';
-import crypto from 'node:crypto';
 import type {
-  Provider as ProviderName,
-  ModelId,
-  Message,
-  LoopConfig,
   Conversation as ConversationData,
+  LoopConfig,
+  Message,
+  ModelId,
+  Provider as ProviderName,
+  QueuedMessage,
   ServerMessage,
   SubAgent,
-  QueuedMessage,
 } from '@claude-web-view/shared';
-import { getProvider, ProviderParseError, type Provider, type ProviderEvent } from './providers';
+import express, { type Request, type Response } from 'express';
+import { v4 as uuidv4 } from 'uuid';
+import { WebSocket, WebSocketServer } from 'ws';
 import { loadAllConversations, pollForChanges } from './adapters/jsonl';
-import { writeCodexMessage } from './adapters/codex-persistence';
+import { type Provider, ProviderParseError, getProvider } from './providers';
+import { isModelIdValidForProvider, modelValidationHint } from './providers/model-validation';
 
 import multer from 'multer';
 
@@ -80,13 +80,7 @@ interface MessageData {
   content: string;
 }
 
-interface ReadyData {
-  type: 'ready';
-  conversationId: string;
-  isReady: boolean;
-}
-
-type BroadcastData = ServerMessage | ChunkData | MessageCompleteData | MessageData | ReadyData;
+type BroadcastData = ServerMessage | ChunkData | MessageCompleteData | MessageData;
 
 // =============================================================================
 // Helper Functions
@@ -103,6 +97,18 @@ function broadcastToAll(data: BroadcastData): void {
   });
 }
 
+function stripAnsi(value: string): string {
+  return value.replace(/\x1B\[[0-9;]*m/g, '');
+}
+
+function stderrSnippet(value: string, maxLength = 400): string {
+  const cleaned = stripAnsi(value).replace(/\r/g, '\n').trim();
+  if (!cleaned) return '';
+  const tail = cleaned.slice(-1200).replace(/\s+/g, ' ').trim();
+  if (!tail) return '';
+  return tail.length > maxLength ? `${tail.slice(0, maxLength - 3)}...` : tail;
+}
+
 // =============================================================================
 // Conversation Class
 // =============================================================================
@@ -114,19 +120,54 @@ function broadcastToAll(data: BroadcastData): void {
  * knownSessionIds tracks all sessionIds (including rotated ones) so the
  * file poller doesn't import orphaned JSONL files as duplicates.
  */
+// STATE MACHINE
+// =============
+// Server-side (authoritative):
+//   isRunning   — process is alive (spawn → true, close → false)
+//   queue[]     — server-owned FIFO (pending → sending → removed on close)
+//
+// Client-side (derived, NOT in this class):
+//   confirmed   — server has confirmed this conversation exists
+//   isStreaming  — assistant is producing content (message → true, message_complete → false)
+//   isRunning    — mirrors server's isRunning via 'status' broadcasts (single source)
+//
+// Broadcast sequence on normal completion:
+//   1. message_complete  → client stops streaming indicator
+//   2. status:false      → client marks process done (from close handler)
+//   3. queue_updated     → client mirrors updated queue
+//   4. processQueue()    → server spawns next message if queued
+//
+// Kill paths (all lead to close handler):
+//   stop_conversation WS → stop() → SIGTERM → close
+//   delete_conversation WS → stop() + delete → close
+//   resetProcess (loop) → kill → _isResetting skips close handler
+//   SIGINT (Ctrl-C) → SIGKILL all children
 class Conversation extends EventEmitter {
-  id: string;                    // UI conversation ID (persists across resets)
-  sessionId: string;             // Provider CLI session ID (can be reset for fresh context)
+  id: string; // UI conversation ID (persists across resets)
+  sessionId: string; // Provider CLI session ID (can be reset for fresh context)
   messages: Message[];
   process: ChildProcess | null;
   isRunning: boolean;
-  isReady: boolean;              // True when CLI process is ready to receive messages
   createdAt: Date;
   workingDirectory: string;
   loopConfig: LoopConfig | null;
   provider: ProviderName;
-  model: ModelId | undefined;     // Provider-specific model identifier (e.g. 'opus', 'gpt-5.2-high')
+  model: ModelId | undefined; // Provider-specific model identifier (e.g. 'opus', 'gpt-5.3-codex-high')
   providerConfig: Provider | null;
+  // Oompa worker detection — true if first user message started with "[oompa]".
+  // Set during JSONL loading, preserved across restarts.
+  isWorker: boolean;
+  // Swarm grouping: shared across all workers in the same oompa run.
+  swarmId: string | null;
+  // Worker identity within a swarm (e.g., "w0", "claude-0").
+  workerId: string | null;
+  // Worker role within the swarm: "work" (task execution), "review" (code review), "fix" (fixing review feedback).
+  workerRole: 'work' | 'review' | 'fix' | null;
+  // Parent conversation id for provider-native spawned sub-agent threads.
+  // For Codex this is resolved from thread_spawn.parent_thread_id.
+  parentConversationId: string | null;
+  // Full model name from CLI (e.g., "claude-sonnet-4-5-20250929") — more specific than provider.
+  modelName: string | null;
   // Sub-agent tracking
   subAgents: SubAgent[];
   // Server-owned message queue — persists across client navigation/refresh.
@@ -138,9 +179,16 @@ class Conversation extends EventEmitter {
   private _hasStartedSession: boolean;
   // Buffer for incomplete JSON lines from stdout
   private _stdoutBuffer: string;
+  // Buffer stderr for this process run so silent failures can be surfaced to UI.
+  private _stderrBuffer: string;
+  // Tracks whether we received provider JSON events for this process run.
+  private _sawStdoutEventThisRun: boolean;
   // Loop iteration tracking — set by runLoop(), read by handleOutput() to tag messages
   _currentLoopIteration: number | null;
   _currentLoopTotal: number | null;
+  // When true, close handler is a no-op — resetProcess() handles its own cleanup.
+  // Prevents duplicate broadcasts and spurious dequeue during loop context resets.
+  private _isResetting: boolean;
 
   constructor(
     id: string,
@@ -148,8 +196,20 @@ class Conversation extends EventEmitter {
     provider: ProviderName = 'claude',
     /** Optional: set session ID when loading from JSONL (defaults to new UUID) */
     existingSessionId?: string,
-    /** Optional: provider-specific model identifier (e.g. 'opus', 'gpt-5.2-high') */
-    model?: ModelId
+    /** Optional: provider-specific model identifier (e.g. 'opus', 'gpt-5.3-codex-high') */
+    model?: ModelId,
+    /** Optional: true if this is an oompa worker conversation */
+    isWorker = false,
+    /** Optional: swarm ID from [oompa:<swarmId>:...] tag */
+    swarmId: string | null = null,
+    /** Optional: worker ID from [oompa:...:<workerId>] tag */
+    workerId: string | null = null,
+    /** Optional: worker role inferred from first message content */
+    workerRole: 'work' | 'review' | 'fix' | null = null,
+    /** Optional: parent conversation id for provider-native sub-agent sessions */
+    parentConversationId: string | null = null,
+    /** Optional: full model name from CLI */
+    modelName: string | null = null
   ) {
     super();
     this.id = id;
@@ -160,12 +220,17 @@ class Conversation extends EventEmitter {
     this.messages = [];
     this.process = null;
     this.isRunning = false;
-    this.isReady = true; // Ready immediately - we spawn process per message
     this.createdAt = new Date();
     this.workingDirectory = workingDirectory || process.cwd();
     this.loopConfig = null;
     this.provider = provider;
     this.model = model;
+    this.isWorker = isWorker;
+    this.swarmId = swarmId;
+    this.workerId = workerId;
+    this.workerRole = workerRole;
+    this.parentConversationId = parentConversationId;
+    this.modelName = modelName;
     this.providerConfig = getProvider(provider);
     this.subAgents = [];
     this.queue = [];
@@ -173,8 +238,11 @@ class Conversation extends EventEmitter {
     // Mark session as started if loading existing (use --resume for next message)
     this._hasStartedSession = existingSessionId !== undefined;
     this._stdoutBuffer = '';
+    this._stderrBuffer = '';
+    this._sawStdoutEventThisRun = false;
     this._currentLoopIteration = null;
     this._currentLoopTotal = null;
+    this._isResetting = false;
   }
 
   /**
@@ -189,14 +257,23 @@ class Conversation extends EventEmitter {
     }
 
     const shouldResume = this._hasStartedSession;
-    console.log(`[${this.id}] Spawning ${this.provider} (claude-session=${this.sessionId.substring(0, 8)}..., resume=${shouldResume})`);
+    console.log(
+      `[${this.id}] Spawning ${this.provider} (provider-session=${this.sessionId.substring(0, 8)}..., resume=${shouldResume})`
+    );
     console.log(`[${this.id}] Message: "${content.substring(0, 50)}"`);
 
     // Reset stdout buffer for new process
     this._stdoutBuffer = '';
+    this._stderrBuffer = '';
+    this._sawStdoutEventThisRun = false;
 
     // Use sessionId (not conversation id) for CLI session tracking
-    const spawnConfig = this.providerConfig!.getSpawnConfig(this.sessionId, this.workingDirectory, shouldResume, this.model);
+    const spawnConfig = this.providerConfig!.getSpawnConfig(
+      this.sessionId,
+      this.workingDirectory,
+      shouldResume,
+      this.model
+    );
     // Detached: child gets own process group, survives server SIGTERM (hot-reload).
     // unref(): Node won't block exit waiting for this child.
     // Pipes work while server is alive. When server exits, pipes break:
@@ -231,12 +308,15 @@ class Conversation extends EventEmitter {
       for (const line of lines) {
         const trimmed = line.trim();
         if (!trimmed) continue;
+        this._sawStdoutEventThisRun = true;
 
         try {
           const json = JSON.parse(trimmed) as unknown;
           const jsonType = (json as { type?: string }).type;
           const eventType = (json as { event?: { type?: string } }).event?.type;
-          console.log(`[${this.id}] RAW: type=${jsonType}${eventType ? `, event.type=${eventType}` : ''}`);
+          console.log(
+            `[${this.id}] RAW: type=${jsonType}${eventType ? `, event.type=${eventType}` : ''}`
+          );
 
           // Codex emits thread.started with the real session ID (thread_id).
           // Capture it so subsequent messages use `codex exec resume <thread_id>`.
@@ -246,6 +326,28 @@ class Conversation extends EventEmitter {
               console.log(`[${this.id}] Codex thread_id captured: ${threadId}`);
               this.sessionId = threadId;
               knownSessionIds.add(threadId);
+            }
+          }
+
+          // OpenCode emits sessionID on every JSON event.
+          // Capture it so subsequent messages can use `opencode run --session <id>`.
+          if (this.provider === 'opencode') {
+            const part = (json as { part?: unknown }).part;
+            const partObj =
+              typeof part === 'object' && part !== null ? (part as Record<string, unknown>) : null;
+            const openCodeSessionId =
+              (json as { sessionID?: unknown }).sessionID ??
+              (json as { sessionId?: unknown }).sessionId ??
+              (json as { session_id?: unknown }).session_id ??
+              partObj?.sessionID ??
+              partObj?.sessionId ??
+              partObj?.session_id;
+            if (typeof openCodeSessionId === 'string' && openCodeSessionId.length > 0) {
+              if (this.sessionId !== openCodeSessionId) {
+                console.log(`[${this.id}] OpenCode sessionID captured: ${openCodeSessionId}`);
+              }
+              this.sessionId = openCodeSessionId;
+              knownSessionIds.add(openCodeSessionId);
             }
           }
 
@@ -264,18 +366,68 @@ class Conversation extends EventEmitter {
     });
 
     this.process.stderr?.on('data', (data: Buffer) => {
-      console.error(`[${this.id}] stderr:`, data.toString());
+      const chunk = data.toString();
+      this._stderrBuffer += chunk;
+      console.error(`[${this.id}] stderr:`, chunk);
+    });
+
+    // Handle spawn errors (ENOENT, EACCES, etc.) — without this handler,
+    // a failed spawn leaves isRunning=true forever, blocking the queue.
+    // The 'close' event still fires after 'error', so we just log here
+    // and let the close handler do the state cleanup.
+    this.process.on('error', (err: Error) => {
+      console.error(`[${this.id}] Process spawn error: ${err.message}`);
+      // Broadcast error to client so they see why the conversation died
+      broadcastToAll({
+        type: 'message',
+        conversationId: this.id,
+        role: 'system',
+        content: `Process error: ${err.message}`,
+      });
     });
 
     this.process.on('close', (code: number | null) => {
       console.log(`[${this.id}] Process closed with code ${code}`);
+
+      // resetProcess() handles its own cleanup. If _isResetting, the kill was
+      // intentional (loop context clear) and the loop engine will immediately
+      // call sendMessage() to spawn the next iteration. Skip all cleanup here.
+      if (this._isResetting) return;
+
+      // Non-zero exit = crash. Notify the client so the user sees why
+      // the response stopped mid-sentence instead of silently ending.
+      if (code !== null && code !== 0) {
+        const details = stderrSnippet(this._stderrBuffer);
+        const errorMsg = details
+          ? `Process exited with code ${code}: ${details}`
+          : `Process exited with code ${code}`;
+        console.error(`[${this.id}] ${errorMsg}`);
+        broadcastToAll({
+          type: 'message',
+          conversationId: this.id,
+          role: 'system',
+          content: errorMsg,
+        });
+      }
+
+      // Some providers (notably OpenCode) can fail with exit code 0 and write
+      // the actionable error only to stderr. If no stdout events were emitted,
+      // surface that stderr as a system message instead of failing silently.
+      if (code === 0 && !this._sawStdoutEventThisRun) {
+        const details = stderrSnippet(this._stderrBuffer);
+        if (details) {
+          broadcastToAll({
+            type: 'message',
+            conversationId: this.id,
+            role: 'system',
+            content: `Provider reported an error without response output: ${details}`,
+          });
+        }
+      }
+
       this.isRunning = false;
       this.process = null;
       this.broadcastStatus();
-      // Broadcast ready so queued messages (e.g. interrupt-and-send) can process.
-      // This is the ONLY place that should broadcast ready after a process ends —
-      // stop() defers to this handler to avoid racing the actual process exit.
-      this.broadcastReady();
       // Dequeue the "sending" message (completed or crashed) and process next.
       // This is the SINGLE code path for dequeue — not split between
       // message_complete and close. Handles both success and crash.
@@ -283,8 +435,9 @@ class Conversation extends EventEmitter {
         this.queue.shift();
         this.broadcastQueue();
       }
-      // Small delay to let the client process status+ready broadcasts first.
-      setTimeout(() => this.processQueue(), 100);
+      // WS message ordering guarantees clients see status:false before the
+      // next spawn's status:true. No delay needed.
+      this.processQueue();
     });
 
     // Write message and close stdin to trigger processing
@@ -313,12 +466,15 @@ class Conversation extends EventEmitter {
         break;
 
       case 'text_delta': {
+        this._sawStdoutEventThisRun = true;
         // BUG FIX: Must create assistant message BEFORE sending chunks
         // The client expects the last message to be role='assistant' when receiving chunks.
         // If we don't broadcast the assistant message first, chunks are silently ignored.
         const lastMsg = this.messages[this.messages.length - 1];
         if (!lastMsg || lastMsg.role !== 'assistant') {
-          console.log(`[${this.id}] Creating NEW assistant message (msg #${this.messages.length + 1})`);
+          console.log(
+            `[${this.id}] Creating NEW assistant message (msg #${this.messages.length + 1})`
+          );
           const newMsg: Message = {
             role: 'assistant',
             content: '',
@@ -344,7 +500,9 @@ class Conversation extends EventEmitter {
           currentMsg.content += event.text;
         }
         // Now send the text chunk - client will append to the assistant message
-        console.log(`[${this.id}] chunk (${event.text.length} chars): "${event.text.substring(0, 30).replace(/\n/g, '\\n')}..."`);
+        console.log(
+          `[${this.id}] chunk (${event.text.length} chars): "${event.text.substring(0, 30).replace(/\n/g, '\\n')}..."`
+        );
         this.broadcastChunk({
           type: 'chunk',
           conversationId: this.id,
@@ -357,7 +515,8 @@ class Conversation extends EventEmitter {
         // Check if this is a Task tool (sub-agent spawn)
         if (event.name === 'Task') {
           // Extract description from input if available, otherwise use generic
-          const description = (event.input as { description?: string }).description || 'Running sub-agent task...';
+          const description =
+            (event.input as { description?: string }).description || 'Running sub-agent task...';
           const blockId = (event.input as { _blockId?: string })._blockId || uuidv4();
 
           // Create a new sub-agent
@@ -374,7 +533,9 @@ class Conversation extends EventEmitter {
           this.subAgents.push(subAgent);
           this._pendingTaskTools.set(blockId, { id: blockId, startedAt: new Date() });
 
-          console.log(`[${this.id}] Sub-agent started: ${blockId.substring(0, 8)} - "${description.substring(0, 50)}"`);
+          console.log(
+            `[${this.id}] Sub-agent started: ${blockId.substring(0, 8)} - "${description.substring(0, 50)}"`
+          );
 
           // Broadcast sub-agent start
           broadcastToAll({
@@ -385,14 +546,15 @@ class Conversation extends EventEmitter {
         } else {
           // For non-Task tools, check if we have an active sub-agent and update its current action
           if (this.subAgents.length > 0) {
-            const activeAgent = this.subAgents.find(a => a.status === 'running');
+            const activeAgent = this.subAgents.find((a) => a.status === 'running');
             if (activeAgent) {
               // Format the current action based on tool name
               let actionDisplay = event.name;
               if (event.input) {
                 // Extract file path if present
-                const filePath = (event.input as { file_path?: string; path?: string }).file_path
-                  || (event.input as { file_path?: string; path?: string }).path;
+                const filePath =
+                  (event.input as { file_path?: string; path?: string }).file_path ||
+                  (event.input as { file_path?: string; path?: string }).path;
                 if (filePath) {
                   // Show just the filename for brevity
                   const fileName = filePath.split('/').pop() || filePath;
@@ -427,9 +589,6 @@ class Conversation extends EventEmitter {
       }
 
       case 'message_complete': {
-        // Get the last assistant message to persist it
-        const lastMsg = this.messages[this.messages.length - 1];
-
         // Mark all running sub-agents as complete
         const completedAt = new Date();
         for (const agent of this.subAgents) {
@@ -459,13 +618,6 @@ class Conversation extends EventEmitter {
           conversationId: this.id,
         });
 
-        // Persist the completed assistant message for Codex conversations
-        if (lastMsg && lastMsg.role === 'assistant') {
-          this.persistMessage(lastMsg).catch(err => {
-            console.error(`[${this.id}] Failed to persist assistant message:`, err);
-          });
-        }
-
         // Emit for loop engine — replaces fragile monkey-patching of handleOutput.
         // See docs/ralph_loop_design.md §Bug 2.
         this.emit('iteration_complete');
@@ -479,32 +631,6 @@ class Conversation extends EventEmitter {
         // TypeScript exhaustive check - this should never happen
         const _exhaustive: never = event;
         throw new Error(`Unhandled event type: ${JSON.stringify(_exhaustive)}`);
-    }
-  }
-
-  /**
-   * Persist a message to disk for Codex conversations.
-   * Only persists Codex conversations (Claude Code handles its own persistence).
-   * Failures are logged but don't throw - persistence shouldn't break active conversations.
-   *
-   * @param message - The message to persist
-   */
-  private async persistMessage(message: Message): Promise<void> {
-    // Only persist Codex conversations
-    if (this.provider !== 'codex') {
-      return;
-    }
-
-    // Skip loop markers (system messages we add for UI)
-    if (message.isLoopMarker) {
-      return;
-    }
-
-    try {
-      await writeCodexMessage(this.id, this.workingDirectory, message);
-    } catch (error) {
-      // writeCodexMessage already catches and logs errors, but just in case
-      console.error(`[${this.id}] Unexpected error in persistMessage:`, error);
     }
   }
 
@@ -532,11 +658,6 @@ class Conversation extends EventEmitter {
       conversationId: this.id,
     });
 
-    // Persist user message for Codex conversations (async, non-blocking)
-    this.persistMessage(userMessage).catch(err => {
-      console.error(`[${this.id}] Failed to persist user message:`, err);
-    });
-
     // Spawn CLI process to handle this message
     this.spawnForMessage(content);
   }
@@ -545,7 +666,7 @@ class Conversation extends EventEmitter {
     if (!this.process) return;
 
     const proc = this.process;
-    // CRITICAL: Don't set isRunning/isReady here. The 'close' handler does that.
+    // CRITICAL: Don't set isRunning here. The 'close' handler does that.
     // This ensures atomicity: process exits → state updated → queue dequeued →
     // processQueue() spawns next. If we set state here, processQueue could fire
     // while the old process is still alive, and spawnForMessage's isRunning
@@ -564,22 +685,25 @@ class Conversation extends EventEmitter {
 
   // Reset process for fresh context (used in loop with clearContext).
   // Generates new CLI session ID while keeping conversation ID for UI continuity.
-  // IMPORTANT: Do NOT set isReady = false here. We spawn a fresh process per
-  // message (spawnForMessage), so the conversation is always conceptually "ready."
-  // Setting isReady = false broadcasts a false "not ready" state to the client,
-  // which breaks the loop engine. See docs/ralph_loop_design.md §Bug 1.
+  // Sets _isResetting so the close handler is a no-op — we handle cleanup here
+  // because the loop engine immediately spawns the next iteration.
   resetProcess(): void {
     if (this.process) {
+      this._isResetting = true;
       this.process.kill();
       this.process = null;
       this.isRunning = false;
+      this.broadcastStatus();
+      this._isResetting = false;
     }
     // Generate new session ID for fresh context
     const oldSessionId = this.sessionId;
     this.sessionId = uuidv4();
     knownSessionIds.add(this.sessionId);
     this._hasStartedSession = false;
-    console.log(`[${this.id}] Reset session: ${oldSessionId.substring(0, 8)}... -> ${this.sessionId.substring(0, 8)}...`);
+    console.log(
+      `[${this.id}] Reset session: ${oldSessionId.substring(0, 8)}... -> ${this.sessionId.substring(0, 8)}...`
+    );
   }
 
   broadcastChunk(data: ChunkData | MessageCompleteData): void {
@@ -595,14 +719,6 @@ class Conversation extends EventEmitter {
       type: 'status',
       conversationId: this.id,
       isRunning: this.isRunning,
-    });
-  }
-
-  broadcastReady(): void {
-    broadcastToAll({
-      type: 'ready',
-      conversationId: this.id,
-      isReady: this.isReady,
     });
   }
 
@@ -654,11 +770,11 @@ class Conversation extends EventEmitter {
   }
 
   /**
-   * Process the next queued message if the conversation is idle and ready.
-   * Called after status/ready changes, message_complete, and enqueueMessage.
+   * Process the next queued message if the conversation is idle.
+   * Called from: close handler (after process exits), enqueueMessage (new message).
    */
   processQueue(): void {
-    if (this.isRunning || !this.isReady) return;
+    if (this.isRunning) return;
     if (this.loopConfig?.isLooping) return;
     if (this.queue.length === 0) return;
 
@@ -670,13 +786,12 @@ class Conversation extends EventEmitter {
     this.sendMessage(next.content);
   }
 
-
   toJSON(): ConversationData {
     return {
       id: this.id,
       messages: this.messages,
       isRunning: this.isRunning,
-      isReady: this.isReady,
+      confirmed: true,
       createdAt: this.createdAt,
       workingDirectory: this.workingDirectory,
       loopConfig: this.loopConfig,
@@ -684,6 +799,12 @@ class Conversation extends EventEmitter {
       model: this.model,
       subAgents: this.subAgents,
       queue: this.queue,
+      isWorker: this.isWorker,
+      swarmId: this.swarmId,
+      workerId: this.workerId,
+      workerRole: this.workerRole,
+      parentConversationId: this.parentConversationId,
+      modelName: this.modelName,
     };
   }
 }
@@ -705,7 +826,8 @@ async function runLoop(
   iterations: string | number,
   clearContext: boolean
 ): Promise<void> {
-  const totalIterations = typeof iterations === 'string' ? Number.parseInt(iterations, 10) : iterations;
+  const totalIterations =
+    typeof iterations === 'string' ? Number.parseInt(iterations, 10) : iterations;
 
   conv.loopConfig = {
     totalIterations,
@@ -895,7 +1017,7 @@ interface NewConversationData {
   id?: string; // Client-generated UUID for optimistic insert
   workingDirectory?: string;
   provider?: ProviderName;
-  model?: ModelId; // Provider-specific model identifier (e.g. 'opus', 'gpt-5.2-high')
+  model?: ModelId; // Provider-specific model identifier (e.g. 'opus', 'gpt-5.3-codex-high')
 }
 
 interface SendMessageData {
@@ -999,7 +1121,10 @@ wss.on('connection', (ws: WebSocket) => {
   ws.on('message', (message: Buffer | string) => {
     try {
       const data = JSON.parse(message.toString()) as ClientMessageData;
-      console.log(`[WS] Received message type: ${data.type}`, JSON.stringify(data).substring(0, 200));
+      console.log(
+        `[WS] Received message type: ${data.type}`,
+        JSON.stringify(data).substring(0, 200)
+      );
 
       switch (data.type) {
         case 'new_conversation': {
@@ -1008,17 +1133,33 @@ wss.on('connection', (ws: WebSocket) => {
           // Expand ~ to home directory
           let workingDir = data.workingDirectory || process.cwd();
           if (workingDir.startsWith('~')) {
-            workingDir = workingDir.replace(/^~/, process.env.HOME || process.env.USERPROFILE || '');
+            workingDir = workingDir.replace(
+              /^~/,
+              process.env.HOME || process.env.USERPROFILE || ''
+            );
           }
-          const provider = data.provider || 'claude'; // Support 'claude' or 'codex'
+          // Normalize path: remove trailing slashes, resolve . and ..
+          // so "/foo/bar/" and "/foo/bar" group as the same project
+          workingDir = path.normalize(workingDir).replace(/\/+$/, '');
+          const provider = data.provider || 'claude'; // Support 'claude', 'codex', or 'opencode'
           const model = data.model; // Provider-specific model (undefined = provider default)
 
           // Validate provider
-          if (provider !== 'claude' && provider !== 'codex') {
+          if (provider !== 'claude' && provider !== 'codex' && provider !== 'opencode') {
             ws.send(
               JSON.stringify({
                 type: 'error',
-                message: `Invalid provider: ${provider}. Must be 'claude' or 'codex'.`,
+                message: `Invalid provider: ${provider}. Must be 'claude', 'codex', or 'opencode'.`,
+              })
+            );
+            return;
+          }
+
+          if (!isModelIdValidForProvider(provider, model)) {
+            ws.send(
+              JSON.stringify({
+                type: 'error',
+                message: `Invalid model '${model}' for provider '${provider}'. Expected ${modelValidationHint(provider)}.`,
               })
             );
             return;
@@ -1061,7 +1202,9 @@ wss.on('connection', (ws: WebSocket) => {
         }
 
         case 'send_message': {
-          console.log(`[WS] send_message for ${data.conversationId}: "${data.content.substring(0, 50)}"`);
+          console.log(
+            `[WS] send_message for ${data.conversationId}: "${data.content.substring(0, 50)}"`
+          );
           const conversation = conversations.get(data.conversationId);
           if (conversation) {
             console.log(`[WS] Found conversation, calling sendMessage`);
@@ -1112,8 +1255,19 @@ wss.on('connection', (ws: WebSocket) => {
         case 'set_model': {
           const conv = conversations.get(data.conversationId);
           if (conv) {
+            if (!isModelIdValidForProvider(conv.provider, data.model)) {
+              ws.send(
+                JSON.stringify({
+                  type: 'error',
+                  message: `Invalid model '${data.model}' for provider '${conv.provider}'. Expected ${modelValidationHint(conv.provider)}.`,
+                })
+              );
+              return;
+            }
             conv.model = data.model;
-            console.log(`[WS] Model changed for ${data.conversationId}: ${data.model ?? 'default'}`);
+            console.log(
+              `[WS] Model changed for ${data.conversationId}: ${data.model ?? 'default'}`
+            );
             // Broadcast updated conversation
             ws.send(
               JSON.stringify({
@@ -1206,7 +1360,10 @@ app.post('/api/upload', upload.array('files', 20), (req: Request, res: Response)
     size: f.size,
   }));
 
-  console.log(`[Upload] ${files.length} file(s) saved:`, result.map((r) => r.absolutePath));
+  console.log(
+    `[Upload] ${files.length} file(s) saved:`,
+    result.map((r) => r.absolutePath)
+  );
   res.json({ files: result });
 });
 
@@ -1285,7 +1442,11 @@ app.get('/api/settings', (_req: Request, res: Response) => {
 // Used by the Sidebar model dropdown to show available models per provider.
 app.get('/api/models', (req: Request, res: Response) => {
   const providerName = (req.query.provider as string) || 'claude';
-  const provider = getProvider(providerName as ProviderName);
+  if (providerName !== 'claude' && providerName !== 'codex' && providerName !== 'opencode') {
+    res.status(400).json({ error: `Invalid provider: ${providerName}` });
+    return;
+  }
+  const provider = getProvider(providerName);
   res.json(provider.listModels());
 });
 
@@ -1376,6 +1537,35 @@ app.get('/api/paths', async (req: Request, res: Response) => {
   res.json([]);
 });
 
+// Validate if a path exists and is a directory (used by PathAutocomplete validation)
+app.get('/api/validate-path', async (req: Request, res: Response) => {
+  const inputPath = (req.query.path as string) || '';
+
+  if (!inputPath) {
+    res.json({ valid: false, error: 'Empty path' });
+    return;
+  }
+
+  // Expand ~ to home directory
+  let expandedPath = inputPath;
+  if (expandedPath.startsWith('~')) {
+    expandedPath = expandedPath.replace(/^~/, os.homedir());
+  }
+
+  const normalizedPath = path.normalize(expandedPath);
+
+  try {
+    const stats = await fs.promises.stat(normalizedPath);
+    if (stats.isDirectory()) {
+      res.json({ valid: true, path: normalizedPath });
+    } else {
+      res.json({ valid: false, error: 'Path is not a directory' });
+    }
+  } catch {
+    res.json({ valid: false, error: 'Directory not found' });
+  }
+});
+
 // Create a directory (used by PathAutocomplete's "Create folder" option)
 app.post('/api/mkdir', express.json(), async (req: Request, res: Response) => {
   const dirPath = req.body?.path as string | undefined;
@@ -1423,6 +1613,196 @@ app.get('/api/files', (req: Request, res: Response) => {
   });
 });
 
+// =============================================================================
+// Swarm Dashboard APIs — git log, oompa config, and file reading for the
+// /workers detail view. These are one-shot REST queries (not streaming).
+//
+// SECURITY: All endpoints restrict access to directories that are known to
+// the server as conversation working directories. This prevents arbitrary
+// filesystem access via crafted query parameters.
+// =============================================================================
+
+/** Check if a resolved path is within any known conversation directory. */
+function isUnderKnownProject(resolved: string): boolean {
+  for (const conv of conversations.values()) {
+    if (resolved.startsWith(path.resolve(conv.workingDirectory))) return true;
+  }
+  return false;
+}
+
+app.get('/api/git-log', (req: Request, res: Response) => {
+  const dir = req.query.dir as string;
+  if (!dir || !dir.startsWith('/')) {
+    res.status(400).json({ error: 'Absolute directory path required' });
+    return;
+  }
+
+  const resolved = path.resolve(dir);
+  if (!isUnderKnownProject(resolved)) {
+    res.status(403).json({ error: 'Directory not associated with any conversation' });
+    return;
+  }
+
+  // Use tab delimiter — tabs never appear in commit messages, unlike |
+  try {
+    const raw = execSync('git log --oneline -20 --format="%H\t%s\t%aI\t%an"', {
+      cwd: resolved,
+      timeout: 5000,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+      .toString()
+      .trim();
+
+    const entries = raw
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => {
+        const parts = line.split('\t');
+        if (parts.length < 4) return { hash: parts[0] ?? '', message: line, date: '', author: '' };
+        return { hash: parts[0], message: parts[1], date: parts[2], author: parts[3] };
+      });
+
+    res.json(entries);
+  } catch {
+    res.json([]);
+  }
+});
+
+app.get('/api/oompa-config', (req: Request, res: Response) => {
+  const dir = req.query.dir as string;
+  if (!dir || !dir.startsWith('/')) {
+    res.status(400).json({ error: 'Absolute directory path required' });
+    return;
+  }
+
+  const resolved = path.resolve(dir);
+  if (!isUnderKnownProject(resolved)) {
+    res.status(403).json({ error: 'Directory not associated with any conversation' });
+    return;
+  }
+
+  const configPath = path.join(resolved, 'oompa.json');
+  if (!fs.existsSync(configPath)) {
+    res.status(404).json({ error: 'No oompa.json found' });
+    return;
+  }
+
+  try {
+    const content = fs.readFileSync(configPath, 'utf-8');
+    res.json(JSON.parse(content));
+  } catch (e) {
+    res.status(500).json({ error: `Failed to parse oompa.json: ${(e as Error).message}` });
+  }
+});
+
+// =============================================================================
+// Swarm Run Data API — serves structured run/review/summary JSON from
+// runs/{swarm-id}/ written by oompa's agentnet.runs module.
+// =============================================================================
+
+app.get('/api/swarm-runs', (req: Request, res: Response) => {
+  const dir = req.query.dir as string;
+  if (!dir || !dir.startsWith('/')) {
+    res.status(400).json({ error: 'Absolute directory path required' });
+    return;
+  }
+
+  const resolved = path.resolve(dir);
+  if (!isUnderKnownProject(resolved)) {
+    res.status(403).json({ error: 'Directory not associated with any conversation' });
+    return;
+  }
+
+  const runsDir = path.join(resolved, 'runs');
+  if (!fs.existsSync(runsDir)) {
+    res.json({ runs: [] });
+    return;
+  }
+
+  const entries = fs.readdirSync(runsDir, { withFileTypes: true });
+  const runs = entries
+    .filter((e) => e.isDirectory())
+    .map((e) => {
+      const runDir = path.join(runsDir, e.name);
+      const runFile = path.join(runDir, 'run.json');
+      const summaryFile = path.join(runDir, 'summary.json');
+
+      let run = null;
+      let summary = null;
+
+      if (fs.existsSync(runFile)) {
+        run = JSON.parse(fs.readFileSync(runFile, 'utf-8'));
+      }
+      if (fs.existsSync(summaryFile)) {
+        summary = JSON.parse(fs.readFileSync(summaryFile, 'utf-8'));
+      }
+
+      return { swarmId: e.name, run, summary };
+    })
+    .sort((a, b) => {
+      const aTime = a.run?.['started-at'] ?? '';
+      const bTime = b.run?.['started-at'] ?? '';
+      return bTime.localeCompare(aTime);
+    });
+
+  res.json({ runs });
+});
+
+app.get('/api/swarm-reviews', (req: Request, res: Response) => {
+  const dir = req.query.dir as string;
+  const swarmId = req.query.swarmId as string;
+  if (!dir || !dir.startsWith('/') || !swarmId) {
+    res.status(400).json({ error: 'dir (absolute path) and swarmId required' });
+    return;
+  }
+
+  const resolved = path.resolve(dir);
+  if (!isUnderKnownProject(resolved)) {
+    res.status(403).json({ error: 'Directory not associated with any conversation' });
+    return;
+  }
+
+  const reviewsDir = path.join(resolved, 'runs', swarmId, 'reviews');
+  if (!fs.existsSync(reviewsDir)) {
+    res.json({ reviews: [] });
+    return;
+  }
+
+  const files = fs
+    .readdirSync(reviewsDir)
+    .filter((f) => f.endsWith('.json'))
+    .sort();
+
+  const reviews = files.map((f) => {
+    const content = fs.readFileSync(path.join(reviewsDir, f), 'utf-8');
+    return JSON.parse(content);
+  });
+
+  res.json({ reviews });
+});
+
+app.get('/api/read-file', (req: Request, res: Response) => {
+  const filePath = req.query.path as string;
+  if (!filePath || !filePath.startsWith('/')) {
+    res.status(400).json({ error: 'Absolute path required' });
+    return;
+  }
+
+  const resolved = path.resolve(filePath);
+  if (!isUnderKnownProject(resolved)) {
+    res.status(403).json({ error: 'Path not under any known project directory' });
+    return;
+  }
+
+  if (!fs.existsSync(resolved)) {
+    res.status(404).json({ error: 'File not found' });
+    return;
+  }
+
+  const content = fs.readFileSync(resolved, 'utf-8');
+  res.json({ content });
+});
+
 app.post('/api/settings', (req: Request, res: Response) => {
   const settings = { ...getSettings(), ...req.body };
   writeSettingsAsync(settings);
@@ -1442,8 +1822,20 @@ const PALETTES_DIR = path.join(os.homedir(), '.agent-viewer', 'palettes');
 
 /** The 14 color keys that make up a Palette16 (excluding 'name') */
 const PALETTE16_KEYS = [
-  'base03', 'base02', 'base01', 'base00', 'base0', 'base1',
-  'yellow', 'orange', 'red', 'magenta', 'violet', 'blue', 'cyan', 'green',
+  'base03',
+  'base02',
+  'base01',
+  'base00',
+  'base0',
+  'base1',
+  'yellow',
+  'orange',
+  'red',
+  'magenta',
+  'violet',
+  'blue',
+  'cyan',
+  'green',
 ] as const;
 
 /** Shape stored on disk — Palette16 values plus description for provenance */
@@ -1493,7 +1885,7 @@ async function initPaletteCache(): Promise<void> {
         const match = entry.name.match(/^palette_(\d+)\.json$/);
         if (!match) return null;
 
-        const n = parseInt(match[1], 10);
+        const n = Number.parseInt(match[1], 10);
         const filePath = path.join(PALETTES_DIR, entry.name);
 
         try {
@@ -1521,7 +1913,9 @@ async function initPaletteCache(): Promise<void> {
       }
     }
 
-    console.log(`Palette cache initialized: ${Object.keys(paletteCache).length} palettes, next number: ${nextPaletteNumber}`);
+    console.log(
+      `Palette cache initialized: ${Object.keys(paletteCache).length} palettes, next number: ${nextPaletteNumber}`
+    );
   } catch (e) {
     const code = (e as NodeJS.ErrnoException).code;
     if (code === 'ENOENT') {
@@ -1608,7 +2002,9 @@ Requirements:
 
   // Use the provider's single-shot config instead of hardcoding spawn args
   const spawnConfig = provider.getSingleShotConfig(prompt);
-  console.log(`[generate-palette] Spawning ${providerName}: ${spawnConfig.command} ${spawnConfig.args.map(a => a.length > 80 ? a.slice(0, 80) + '...' : a).join(' ')}`);
+  console.log(
+    `[generate-palette] Spawning ${providerName}: ${spawnConfig.command} ${spawnConfig.args.map((a) => (a.length > 80 ? a.slice(0, 80) + '...' : a)).join(' ')}`
+  );
   const agentProcess = spawn(spawnConfig.command, spawnConfig.args, spawnConfig.options);
 
   let stdout = '';
@@ -1649,7 +2045,10 @@ Requirements:
     clearTimeout(timeout);
 
     if (code !== 0) {
-      sendError(500, `${providerName} process failed (exit code ${code})${stderr ? `: ${stderr.slice(0, 500)}` : ''}`);
+      sendError(
+        500,
+        `${providerName} process failed (exit code ${code})${stderr ? `: ${stderr.slice(0, 500)}` : ''}`
+      );
       return;
     }
 
@@ -1679,13 +2078,20 @@ Requirements:
     const stored: StoredPalette = {
       name: parsed.name,
       description: description.trim(),
-      base03: parsed.base03, base02: parsed.base02,
-      base01: parsed.base01, base00: parsed.base00,
-      base0:  parsed.base0,  base1:  parsed.base1,
-      yellow: parsed.yellow, orange: parsed.orange,
-      red:    parsed.red,    magenta: parsed.magenta,
-      violet: parsed.violet, blue:   parsed.blue,
-      cyan:   parsed.cyan,   green:  parsed.green,
+      base03: parsed.base03,
+      base02: parsed.base02,
+      base01: parsed.base01,
+      base00: parsed.base00,
+      base0: parsed.base0,
+      base1: parsed.base1,
+      yellow: parsed.yellow,
+      orange: parsed.orange,
+      red: parsed.red,
+      magenta: parsed.magenta,
+      violet: parsed.violet,
+      blue: parsed.blue,
+      cyan: parsed.cyan,
+      green: parsed.green,
     };
 
     // Build Palette16 shape for client and cache
@@ -1716,6 +2122,559 @@ Requirements:
     console.log(`[generate-palette] Success: "${parsed.name}" -> ${key}`);
     res.json({ key, palette });
   });
+});
+
+// =============================================================================
+// GET /api/usage — Aggregate token usage from Claude + Codex + OpenCode sessions.
+//
+// Reads persisted files on disk, sums token counts, and computes approximate cost.
+// Claude: ~/.claude/projects/**/*.jsonl → assistant entries with message.usage
+// Codex:  ~/.codex/sessions/**/*.jsonl  → event_msg with payload.type=token_count
+// OpenCode: ~/.local/share/opencode/storage/message/{session-id}/*.json
+//
+// Query params:
+//   ?days=N  — only include sessions from the last N days (default: 30)
+// =============================================================================
+
+interface UsageEntry {
+  sessionId: string;
+  provider: 'claude' | 'codex' | 'opencode';
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  costUsd: number;
+  date: string; // YYYY-MM-DD
+}
+
+// Approximate pricing per 1M tokens (as of early 2026).
+// Claude: input $3, output $15, cache read $0.30, cache write $3.75
+// Codex: input $2.50, output $10
+function estimateCost(
+  provider: 'claude' | 'codex' | 'opencode',
+  input: number,
+  output: number,
+  cacheRead: number,
+  cacheWrite: number
+): number {
+  if (provider === 'claude') {
+    return (input * 3 + output * 15 + cacheRead * 0.3 + cacheWrite * 3.75) / 1_000_000;
+  }
+  // Codex/OpenAI and OpenCode (provider-backed model pricing can vary by backend).
+  return (input * 2.5 + output * 10) / 1_000_000;
+}
+
+// Per-session cached usage data so we don't re-read unchanged files.
+// Maps filePath → { mtimeMs, data }. Survives across requests.
+const usageFileCache = new Map<
+  string,
+  { mtimeMs: number; data: UsageEntry & { timestampedTokens: { ts: number; tokens: number }[] } }
+>();
+const openCodeUsageCache = new Map<
+  string,
+  { mtimeMs: number; data: UsageEntry & { lastTimestampMs: number } }
+>();
+
+// Full response cache — avoids re-aggregating when nothing changed.
+// Key is `days` param. Invalidated after USAGE_CACHE_TTL_MS.
+interface RateLimit {
+  label: string;
+  usedPercent: number;
+  windowMinutes: number;
+  resetsAt: number | null;
+  tokenCount?: number;
+}
+interface UsageResponse {
+  totalCostUsd: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalSessions: number;
+  days: number;
+  daily: {
+    date: string;
+    inputTokens: number;
+    outputTokens: number;
+    costUsd: number;
+    sessions: number;
+  }[];
+  topSessions: UsageEntry[];
+  rateLimits: { codex: RateLimit[]; claude: RateLimit[] };
+}
+const usageResponseCache = new Map<number, { time: number; data: UsageResponse }>();
+const USAGE_CACHE_TTL_MS = 60_000; // 60s
+
+// Parse a single Claude JSONL file. Returns cached result if mtime unchanged.
+function parseClaudeSession(
+  filePath: string,
+  stat: fs.Stats
+): UsageEntry & { timestampedTokens: { ts: number; tokens: number }[] } {
+  const cached = usageFileCache.get(filePath);
+  if (cached && cached.mtimeMs === stat.mtimeMs) return cached.data;
+
+  const sessionId = path.basename(filePath, '.jsonl');
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let cacheRead = 0;
+  let cacheWrite = 0;
+  let model = 'unknown';
+  const timestampedTokens: { ts: number; tokens: number }[] = [];
+
+  const content = fs.readFileSync(filePath, 'utf-8');
+  for (const line of content.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line);
+      if (entry.type === 'assistant' && entry.message?.usage) {
+        const u = entry.message.usage;
+        const inTok = u.input_tokens ?? 0;
+        const outTok = u.output_tokens ?? 0;
+        inputTokens += inTok;
+        outputTokens += outTok;
+        cacheRead += u.cache_read_input_tokens ?? 0;
+        cacheWrite += u.cache_creation_input_tokens ?? 0;
+        if (entry.message.model && model === 'unknown') {
+          model = entry.message.model;
+        }
+        if (entry.timestamp) {
+          timestampedTokens.push({
+            ts: new Date(entry.timestamp).getTime(),
+            tokens: inTok + outTok,
+          });
+        }
+      }
+    } catch {
+      /* skip malformed lines */
+    }
+  }
+
+  const date = stat.mtime.toISOString().slice(0, 10);
+  const data: UsageEntry & { timestampedTokens: { ts: number; tokens: number }[] } = {
+    sessionId,
+    provider: 'claude',
+    model,
+    inputTokens,
+    outputTokens,
+    cacheReadTokens: cacheRead,
+    cacheWriteTokens: cacheWrite,
+    costUsd: estimateCost('claude', inputTokens, outputTokens, cacheRead, cacheWrite),
+    date,
+    timestampedTokens,
+  };
+  usageFileCache.set(filePath, { mtimeMs: stat.mtimeMs, data });
+  return data;
+}
+
+function parseOpenCodeSessionUsage(
+  sessionDirPath: string
+): (UsageEntry & { lastTimestampMs: number }) | null {
+  const messageFiles = fs.readdirSync(sessionDirPath).filter((f) => f.endsWith('.json'));
+  if (messageFiles.length === 0) {
+    return null;
+  }
+
+  let maxMtimeMs = 0;
+  for (const file of messageFiles) {
+    try {
+      const stat = fs.statSync(path.join(sessionDirPath, file));
+      if (stat.mtimeMs > maxMtimeMs) {
+        maxMtimeMs = stat.mtimeMs;
+      }
+    } catch {
+      // File may disappear between readdir and stat/read.
+    }
+  }
+
+  const cached = openCodeUsageCache.get(sessionDirPath);
+  if (cached && cached.mtimeMs === maxMtimeMs) {
+    return cached.data;
+  }
+
+  const sessionId = path.basename(sessionDirPath);
+  let model = 'unknown';
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let cacheReadTokens = 0;
+  let cacheWriteTokens = 0;
+  let costUsd = 0;
+  let lastTimestampMs = 0;
+  let hasUsage = false;
+
+  for (const file of messageFiles) {
+    const filePath = path.join(sessionDirPath, file);
+    try {
+      const parsed = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+      if (parsed?.role !== 'assistant') {
+        continue;
+      }
+
+      const inTok = typeof parsed?.tokens?.input === 'number' ? parsed.tokens.input : 0;
+      const outTok = typeof parsed?.tokens?.output === 'number' ? parsed.tokens.output : 0;
+      const cacheRead =
+        typeof parsed?.tokens?.cache?.read === 'number' ? parsed.tokens.cache.read : 0;
+      const cacheWrite =
+        typeof parsed?.tokens?.cache?.write === 'number' ? parsed.tokens.cache.write : 0;
+      const messageCost = typeof parsed?.cost === 'number' ? parsed.cost : 0;
+
+      inputTokens += inTok;
+      outputTokens += outTok;
+      cacheReadTokens += cacheRead;
+      cacheWriteTokens += cacheWrite;
+      costUsd += messageCost;
+
+      if (inTok + outTok + cacheRead + cacheWrite > 0 || messageCost > 0) {
+        hasUsage = true;
+      }
+
+      const providerID = typeof parsed?.providerID === 'string' ? parsed.providerID : null;
+      const modelID = typeof parsed?.modelID === 'string' ? parsed.modelID : null;
+      if (model === 'unknown') {
+        if (providerID && modelID) model = `${providerID}/${modelID}`;
+        else if (modelID) model = modelID;
+        else if (providerID) model = providerID;
+      }
+
+      const completedTs = typeof parsed?.time?.completed === 'number' ? parsed.time.completed : 0;
+      const createdTs = typeof parsed?.time?.created === 'number' ? parsed.time.created : 0;
+      const ts = Math.max(completedTs, createdTs);
+      if (ts > lastTimestampMs) {
+        lastTimestampMs = ts;
+      }
+    } catch {
+      // Skip malformed/unreadable message file.
+    }
+  }
+
+  if (!hasUsage) {
+    return null;
+  }
+
+  if (costUsd === 0) {
+    costUsd = estimateCost(
+      'opencode',
+      inputTokens,
+      outputTokens,
+      cacheReadTokens,
+      cacheWriteTokens
+    );
+  }
+
+  const fallbackTs = maxMtimeMs > 0 ? maxMtimeMs : Date.now();
+  const date = new Date(lastTimestampMs > 0 ? lastTimestampMs : fallbackTs)
+    .toISOString()
+    .slice(0, 10);
+
+  const data: UsageEntry & { lastTimestampMs: number } = {
+    sessionId,
+    provider: 'opencode',
+    model,
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
+    costUsd,
+    date,
+    lastTimestampMs: lastTimestampMs > 0 ? lastTimestampMs : fallbackTs,
+  };
+
+  openCodeUsageCache.set(sessionDirPath, { mtimeMs: maxMtimeMs, data });
+  return data;
+}
+
+app.get('/api/usage', async (_req: Request, res: Response) => {
+  const days = Math.min(Math.max(Number.parseInt(String(_req.query.days)) || 30, 1), 365);
+
+  // Check response cache
+  const cached = usageResponseCache.get(days);
+  if (cached && Date.now() - cached.time < USAGE_CACHE_TTL_MS) {
+    res.json(cached.data);
+    return;
+  }
+
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - days);
+  const cutoffMs = cutoff.getTime();
+  const now = Date.now();
+  const fiveHoursAgo = now - 5 * 60 * 60 * 1000;
+  const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
+
+  const entries: UsageEntry[] = [];
+  let claude5hTokens = 0;
+  let claudeWeeklyTokens = 0;
+
+  // --- Claude sessions (single pass: usage entries + rate limit token counts) ---
+  const claudeDir = path.join(os.homedir(), '.claude', 'projects');
+  try {
+    const projectDirs = fs
+      .readdirSync(claudeDir, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => path.join(claudeDir, d.name));
+
+    for (const projDir of projectDirs) {
+      const jsonlFiles = fs.readdirSync(projDir).filter((f) => f.endsWith('.jsonl'));
+      for (const file of jsonlFiles) {
+        const filePath = path.join(projDir, file);
+        const stat = fs.statSync(filePath);
+        // Skip files older than both the query window AND the 7-day rate-limit window
+        if (stat.mtimeMs < cutoffMs && stat.mtimeMs < sevenDaysAgo) continue;
+
+        const data = parseClaudeSession(filePath, stat);
+
+        // Usage entry (for the requested days window)
+        if (stat.mtimeMs >= cutoffMs && data.inputTokens + data.outputTokens > 0) {
+          entries.push(data);
+        }
+
+        // Rate limit token counts (5h + 7d windows)
+        for (const { ts, tokens } of data.timestampedTokens) {
+          if (ts >= sevenDaysAgo) claudeWeeklyTokens += tokens;
+          if (ts >= fiveHoursAgo) claude5hTokens += tokens;
+        }
+      }
+    }
+  } catch {
+    /* ~/.claude/projects may not exist */
+  }
+
+  // --- Codex sessions (single pass: usage entries + rate limits from most recent) ---
+  const codexDir = path.join(os.homedir(), '.codex', 'sessions');
+  const rateLimits: { codex: RateLimit[]; claude: RateLimit[] } = { codex: [], claude: [] };
+  let newestCodexFile = '';
+  let newestCodexMtime = 0;
+
+  try {
+    const years = fs.readdirSync(codexDir, { withFileTypes: true }).filter((d) => d.isDirectory());
+    for (const year of years) {
+      const months = fs
+        .readdirSync(path.join(codexDir, year.name), { withFileTypes: true })
+        .filter((d) => d.isDirectory());
+      for (const month of months) {
+        const dayDirs = fs
+          .readdirSync(path.join(codexDir, year.name, month.name), { withFileTypes: true })
+          .filter((d) => d.isDirectory());
+        for (const day of dayDirs) {
+          const dateStr = `${year.name}-${month.name}-${day.name}`;
+          const dateMs = new Date(dateStr).getTime();
+          // Skip entire day dirs that are too old for BOTH usage and rate limits
+          if (dateMs < cutoffMs && dateMs < sevenDaysAgo) continue;
+
+          const dayPath = path.join(codexDir, year.name, month.name, day.name);
+          const files = fs.readdirSync(dayPath).filter((f) => f.endsWith('.jsonl'));
+          for (const file of files) {
+            const filePath = path.join(dayPath, file);
+            const stat = fs.statSync(filePath);
+
+            // Track most recent for rate limits
+            if (stat.mtimeMs > newestCodexMtime) {
+              newestCodexMtime = stat.mtimeMs;
+              newestCodexFile = filePath;
+            }
+
+            // Only parse for usage if within the query window
+            if (dateMs < cutoffMs) continue;
+
+            const sessionId = file.replace('.jsonl', '');
+            let inputTokens = 0;
+            let outputTokens = 0;
+
+            const content = fs.readFileSync(filePath, 'utf-8');
+            for (const line of content.split('\n')) {
+              if (!line.trim()) continue;
+              try {
+                const entry = JSON.parse(line);
+                if (
+                  entry.type === 'event_msg' &&
+                  entry.payload?.type === 'token_count' &&
+                  entry.payload.info?.total_token_usage
+                ) {
+                  const u = entry.payload.info.total_token_usage;
+                  inputTokens = u.input_tokens ?? 0;
+                  outputTokens = u.output_tokens ?? 0;
+                }
+              } catch {
+                /* skip malformed lines */
+              }
+            }
+
+            if (inputTokens + outputTokens > 0) {
+              entries.push({
+                sessionId,
+                provider: 'codex',
+                model: 'codex',
+                inputTokens,
+                outputTokens,
+                cacheReadTokens: 0,
+                cacheWriteTokens: 0,
+                costUsd: estimateCost('codex', inputTokens, outputTokens, 0, 0),
+                date: dateStr,
+              });
+            }
+          }
+        }
+      }
+    }
+  } catch {
+    /* ~/.codex/sessions may not exist */
+  }
+
+  // --- OpenCode sessions (single pass: assistant message token usage from local storage) ---
+  const openCodeMessageDir = path.join(
+    os.homedir(),
+    '.local',
+    'share',
+    'opencode',
+    'storage',
+    'message'
+  );
+  try {
+    const openCodeSessionDirs = fs
+      .readdirSync(openCodeMessageDir, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => path.join(openCodeMessageDir, d.name));
+
+    for (const sessionDirPath of openCodeSessionDirs) {
+      const usage = parseOpenCodeSessionUsage(sessionDirPath);
+      if (!usage) {
+        continue;
+      }
+
+      if (usage.lastTimestampMs < cutoffMs) {
+        continue;
+      }
+
+      entries.push({
+        sessionId: usage.sessionId,
+        provider: usage.provider,
+        model: usage.model,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        cacheReadTokens: usage.cacheReadTokens,
+        cacheWriteTokens: usage.cacheWriteTokens,
+        costUsd: usage.costUsd,
+        date: usage.date,
+      });
+    }
+  } catch {
+    /* ~/.local/share/opencode/storage/message may not exist */
+  }
+
+  // Extract rate limits from the most recent Codex session file
+  if (newestCodexFile) {
+    try {
+      const content = fs.readFileSync(newestCodexFile, 'utf-8');
+      const lines = content.split('\n').filter((l) => l.trim());
+      for (let i = lines.length - 1; i >= 0; i--) {
+        try {
+          const entry = JSON.parse(lines[i]);
+          if (entry.type === 'event_msg' && entry.payload?.rate_limits) {
+            const r = entry.payload.rate_limits;
+            if (r.primary) {
+              rateLimits.codex.push({
+                label: `${r.primary.window_minutes / 60}h limit`,
+                usedPercent: r.primary.used_percent,
+                windowMinutes: r.primary.window_minutes,
+                resetsAt: r.primary.resets_at ?? null,
+              });
+            }
+            if (r.secondary) {
+              rateLimits.codex.push({
+                label: 'Weekly limit',
+                usedPercent: r.secondary.used_percent,
+                windowMinutes: r.secondary.window_minutes,
+                resetsAt: r.secondary.resets_at ?? null,
+              });
+            }
+            break;
+          }
+        } catch {
+          /* skip */
+        }
+      }
+    } catch {
+      /* file may have been deleted */
+    }
+  }
+
+  // Claude rate limits from timestamped tokens (already computed in single pass above)
+  if (claude5hTokens > 0 || claudeWeeklyTokens > 0) {
+    rateLimits.claude.push({
+      label: '5h window',
+      usedPercent: 0,
+      windowMinutes: 300,
+      resetsAt: null,
+      tokenCount: claude5hTokens,
+    });
+    rateLimits.claude.push({
+      label: 'Weekly',
+      usedPercent: 0,
+      windowMinutes: 10080,
+      resetsAt: null,
+      tokenCount: claudeWeeklyTokens,
+    });
+  }
+
+  // Aggregate by day
+  const byDay = new Map<
+    string,
+    { inputTokens: number; outputTokens: number; costUsd: number; sessions: number }
+  >();
+  let totalCost = 0;
+  let totalInput = 0;
+  let totalOutput = 0;
+
+  for (const e of entries) {
+    totalCost += e.costUsd;
+    totalInput += e.inputTokens;
+    totalOutput += e.outputTokens;
+
+    const existing = byDay.get(e.date);
+    if (existing) {
+      existing.inputTokens += e.inputTokens;
+      existing.outputTokens += e.outputTokens;
+      existing.costUsd += e.costUsd;
+      existing.sessions += 1;
+    } else {
+      byDay.set(e.date, {
+        inputTokens: e.inputTokens,
+        outputTokens: e.outputTokens,
+        costUsd: e.costUsd,
+        sessions: 1,
+      });
+    }
+  }
+
+  const daily = Array.from(byDay.entries())
+    .sort((a, b) => b[0].localeCompare(a[0]))
+    .map(([date, data]) => ({ date, ...data }));
+
+  const sortedEntries = [...entries].sort((a, b) => b.costUsd - a.costUsd);
+  const topSessions = sortedEntries.slice(0, 20);
+
+  // Keep provider tabs useful even when one provider's sessions are lower-cost.
+  for (const provider of ['claude', 'codex', 'opencode'] as const) {
+    if (topSessions.some((entry) => entry.provider === provider)) {
+      continue;
+    }
+    const providerTopSession = sortedEntries.find((entry) => entry.provider === provider);
+    if (providerTopSession) {
+      topSessions.push(providerTopSession);
+    }
+  }
+  topSessions.sort((a, b) => b.costUsd - a.costUsd);
+
+  const response: UsageResponse = {
+    totalCostUsd: totalCost,
+    totalInputTokens: totalInput,
+    totalOutputTokens: totalOutput,
+    totalSessions: entries.length,
+    days,
+    daily,
+    topSessions,
+    rateLimits,
+  };
+
+  usageResponseCache.set(days, { time: Date.now(), data: response });
+  res.json(response);
 });
 
 // Serve static files from client build
@@ -1811,11 +2770,11 @@ function killProcessOnPort(port: number): boolean {
 }
 
 /**
- * Load existing conversations from Claude Code's JSONL files
+ * Load existing conversations from persisted Claude/Codex/OpenCode files.
  * Called on server startup to hydrate the in-memory Map
  */
 async function loadExistingConversations(): Promise<void> {
-  console.log('Loading conversations from JSONL files...');
+  console.log('Loading conversations from persisted session files...');
 
   try {
     const { conversations: loaded, mtimes } = await loadAllConversations();
@@ -1828,7 +2787,14 @@ async function loadExistingConversations(): Promise<void> {
         sessionId,
         convData.workingDirectory,
         convData.provider,
-        sessionId // existingSessionId - marks session as started
+        sessionId, // existingSessionId - marks session as started
+        undefined, // model
+        convData.isWorker, // oompa worker flag from JSONL detection
+        convData.swarmId ?? null,
+        convData.workerId ?? null,
+        convData.workerRole ?? null,
+        resolveParentConversationId(convData.parentConversationId ?? null),
+        convData.modelName ?? null
       );
 
       // Copy over the loaded data
@@ -1839,18 +2805,97 @@ async function loadExistingConversations(): Promise<void> {
       conversations.set(sessionId, conversation);
     }
 
-    console.log(`Loaded ${conversations.size} conversations from JSONL files`);
+    console.log(`Loaded ${conversations.size} conversations from persisted session files`);
   } catch (error) {
-    console.error('Failed to load conversations from JSONL:', error);
+    console.error('Failed to load conversations from persisted sessions:', error);
     // Continue anyway - server can still work without historical data
   }
 }
 
+function findConversationBySessionId(sessionId: string): Conversation | undefined {
+  const direct = conversations.get(sessionId);
+  if (direct) {
+    return direct;
+  }
+
+  for (const conversation of conversations.values()) {
+    if (conversation.sessionId === sessionId) {
+      return conversation;
+    }
+  }
+
+  return undefined;
+}
+
+function getLastUserMessageContent(messages: Message[]): string | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'user') {
+      const content = messages[i].content.trim();
+      return content.length > 0 ? content : null;
+    }
+  }
+  return null;
+}
+
+function isOpenCodeSessionLike(sessionId: string): boolean {
+  return sessionId.startsWith('ses_');
+}
+
 /**
- * Poll JSONL files every 5s for external changes (e.g., user ran `claude` in terminal).
+ * Reconcile OpenCode sessions when the CLI created a real `ses_*` id in local
+ * storage but did not emit JSON events (so we could not capture sessionID on stdout).
+ *
+ * Without this, file polling imports the new `ses_*` as a duplicate conversation.
+ */
+function findOpenCodeBootstrapMatch(
+  sessionId: string,
+  convData: ConversationData
+): Conversation | undefined {
+  if (convData.provider !== 'opencode') return undefined;
+  if (!isOpenCodeSessionLike(sessionId)) return undefined;
+
+  const importedLastUser = getLastUserMessageContent(convData.messages);
+  if (!importedLastUser) return undefined;
+
+  const importedCreatedMs = new Date(convData.createdAt).getTime();
+
+  for (const conv of conversations.values()) {
+    if (conv.provider !== 'opencode') continue;
+    if (conv.id === sessionId) continue;
+    if (isOpenCodeSessionLike(conv.sessionId)) continue;
+    if (conv.workingDirectory !== convData.workingDirectory) continue;
+
+    const existingLastUser = getLastUserMessageContent(conv.messages);
+    if (!existingLastUser || existingLastUser !== importedLastUser) continue;
+
+    const existingCreatedMs = conv.createdAt.getTime();
+    if (
+      Number.isFinite(importedCreatedMs) &&
+      Math.abs(existingCreatedMs - importedCreatedMs) > 5 * 60_000
+    ) {
+      continue;
+    }
+
+    return conv;
+  }
+
+  return undefined;
+}
+
+function resolveParentConversationId(parentSessionId: string | null | undefined): string | null {
+  if (!parentSessionId) {
+    return null;
+  }
+  const parentConversation = findConversationBySessionId(parentSessionId);
+  return parentConversation?.id ?? parentSessionId;
+}
+
+/**
+ * Poll persisted session files every 5s for external changes (e.g., user ran
+ * `claude`, `codex`, or `opencode` in terminal).
  * Only re-parses files with newer mtimes. Skips running conversations (launched by us).
  * Detects externally-running sessions: if a file's mtime changed between polls and
- * we didn't cause it, an external Claude process is writing to it.
+ * we didn't cause it, an external provider process is writing to it.
  * Broadcasts `conversations_updated` and `status` changes to all connected clients.
  */
 function startFilePolling(): void {
@@ -1858,8 +2903,8 @@ function startFilePolling(): void {
 
   setInterval(async () => {
     try {
-      // Collect IDs of running conversations so the poller skips their JSONL files.
-      // Since id === sessionId (except after resetProcess), the Map key matches the filename.
+      // Collect both UI conversation IDs and provider session IDs for running conversations.
+      // Codex can rotate to a thread ID, so id and sessionId are not always the same.
       const activeIds = new Set<string>();
       for (const [id, conv] of conversations) {
         if (conv.isRunning) {
@@ -1879,13 +2924,16 @@ function startFilePolling(): void {
       for (const sessionId of updated.keys()) {
         if (activeIds.has(sessionId)) continue;
 
+        const existingConversation = findConversationBySessionId(sessionId);
+        const conversationId = existingConversation?.id ?? sessionId;
+
         // File changed and we didn't cause it — refresh the "last seen" timestamp
         if (!externallyRunning.has(sessionId)) {
           // Newly detected external activity
           console.log(`[Poll] External activity detected: ${sessionId.substring(0, 8)}`);
           broadcastToAll({
             type: 'status',
-            conversationId: sessionId,
+            conversationId,
             isRunning: true,
           });
         }
@@ -1897,10 +2945,12 @@ function startFilePolling(): void {
       for (const [sessionId, lastSeen] of externallyRunning) {
         if (now - lastSeen >= EXTERNAL_GRACE_MS) {
           externallyRunning.delete(sessionId);
+          const existingConversation = findConversationBySessionId(sessionId);
+          const conversationId = existingConversation?.id ?? sessionId;
           console.log(`[Poll] External activity stopped: ${sessionId.substring(0, 8)}`);
           broadcastToAll({
             type: 'status',
-            conversationId: sessionId,
+            conversationId,
             isRunning: false,
           });
         }
@@ -1913,13 +2963,34 @@ function startFilePolling(): void {
       const changedForBroadcast: ConversationData[] = [];
 
       for (const [sessionId, convData] of updated) {
-        const existing = conversations.get(sessionId);
+        let existing = findConversationBySessionId(sessionId);
+
+        if (!existing) {
+          const reconciled = findOpenCodeBootstrapMatch(sessionId, convData);
+          if (reconciled) {
+            const oldSessionId = reconciled.sessionId;
+            reconciled.sessionId = sessionId;
+            knownSessionIds.add(sessionId);
+            existing = reconciled;
+            console.log(
+              `[Poll] Reconciled OpenCode session ${sessionId.substring(0, 8)} with conversation ${reconciled.id.substring(0, 8)} (old session ${oldSessionId.substring(0, 8)})`
+            );
+          }
+        }
 
         if (existing && !existing.isRunning) {
           // Update existing conversation in-place (preserve process handles, provider config)
           existing.messages = convData.messages;
           existing.subAgents = convData.subAgents;
           existing.createdAt = convData.createdAt;
+          existing.isWorker = convData.isWorker;
+          existing.swarmId = convData.swarmId ?? null;
+          existing.workerId = convData.workerId ?? null;
+          existing.workerRole = convData.workerRole ?? null;
+          existing.parentConversationId = resolveParentConversationId(
+            convData.parentConversationId ?? null
+          );
+          existing.modelName = convData.modelName ?? null;
           const json = existing.toJSON();
           // Mark as running if externally active
           if (externallyRunning.has(sessionId)) {
@@ -1932,7 +3003,14 @@ function startFilePolling(): void {
             sessionId,
             convData.workingDirectory,
             convData.provider,
-            sessionId
+            sessionId,
+            undefined, // model
+            convData.isWorker, // oompa worker flag
+            convData.swarmId ?? null,
+            convData.workerId ?? null,
+            convData.workerRole ?? null,
+            resolveParentConversationId(convData.parentConversationId ?? null),
+            convData.modelName ?? null
           );
           conversation.messages = convData.messages;
           conversation.createdAt = convData.createdAt;
@@ -1963,7 +3041,7 @@ async function startServer(): Promise<void> {
   await initSettingsCache();
   await initPaletteCache();
 
-  const portNumber = typeof PORT === 'string' ? parseInt(PORT, 10) : PORT;
+  const portNumber = typeof PORT === 'string' ? Number.parseInt(PORT, 10) : PORT;
   let isPortAvailable = await checkPort(portNumber);
 
   if (!isPortAvailable) {
@@ -1988,7 +3066,9 @@ async function startServer(): Promise<void> {
       }
     } else {
       console.log('\nAlternatives:');
-      console.log(`  1. Kill manually: lsof -i :${PORT} | grep LISTEN | awk '{print $2}' | xargs kill -9`);
+      console.log(
+        `  1. Kill manually: lsof -i :${PORT} | grep LISTEN | awk '{print $2}' | xargs kill -9`
+      );
       console.log(`  2. Use different port: PORT=3001 pnpm dev:server\n`);
       process.exit(1);
     }

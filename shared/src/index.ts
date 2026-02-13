@@ -113,8 +113,8 @@ export {
 // Core Data Structures
 // =============================================================================
 
-// Provider enum for multi-CLI support (Claude, Codex, etc.)
-export const ProviderSchema = z.enum(['claude', 'codex']);
+// Provider enum for multi-CLI support (Claude, Codex, OpenCode, etc.)
+export const ProviderSchema = z.enum(['claude', 'codex', 'opencode']);
 export type Provider = z.infer<typeof ProviderSchema>;
 
 // =============================================================================
@@ -126,16 +126,36 @@ export type Provider = z.infer<typeof ProviderSchema>;
 //
 // Claude: aliases passed to `claude --model <alias>`
 // Codex: composite strings encoding model + effort level
-//   e.g. "gpt-5.2-high" → `-m gpt-5.2 -c model_reasoning_effort=high`
+//   e.g. "gpt-5.3-codex-high" → `-m gpt-5.3-codex -c reasoning.effort=high`
+// OpenCode: path-style identifiers passed to `opencode run -m <id>`
+//   e.g. "openai/gpt-5" or "opencode/gpt-5-nano"
+// We require at least one "/" segment to avoid collisions with Claude/Codex IDs.
 // =============================================================================
 
 export const ClaudeModelSchema = z.enum(['opus', 'sonnet', 'haiku']);
 export type ClaudeModel = z.infer<typeof ClaudeModelSchema>;
 
-export const CodexModelSchema = z.enum(['gpt-5.2-medium', 'gpt-5.2-high', 'gpt-5.2-xhigh']);
+export const CodexModelSchema = z.enum([
+  'gpt-5.3-codex-medium', 'gpt-5.3-codex-high', 'gpt-5.3-codex-xhigh',
+  'gpt-5.3-codex-spark',
+  'gpt-5.3-codex-spark-medium', 'gpt-5.3-codex-spark-high', 'gpt-5.3-codex-spark-xhigh',
+]);
 export type CodexModel = z.infer<typeof CodexModelSchema>;
 
-export const ModelIdSchema = z.union([ClaudeModelSchema, CodexModelSchema]);
+export type OpenCodeModel = `${string}/${string}`;
+
+// "provider/model" path-style ID (allows additional segments like "openrouter/openai/gpt-5").
+// Allowed chars keep to typical provider/model slugs and version suffixes.
+const OPENCODE_MODEL_ID_REGEX = /^[a-z0-9][a-z0-9._-]*(?:\/[a-z0-9][a-z0-9._:+-]*)+$/i;
+
+export const OpenCodeModelSchema = z.custom<OpenCodeModel>(
+  (value): value is OpenCodeModel => typeof value === 'string' && OPENCODE_MODEL_ID_REGEX.test(value),
+  {
+    message: "Invalid OpenCode model identifier. Expected 'provider/model' format (e.g. 'openai/gpt-5').",
+  }
+);
+
+export const ModelIdSchema = z.union([ClaudeModelSchema, CodexModelSchema, OpenCodeModelSchema]);
 export type ModelId = z.infer<typeof ModelIdSchema>;
 
 /** Display metadata returned by Provider.listModels() for the model dropdown */
@@ -199,11 +219,48 @@ export const QueuedMessageSchema = z.object({
 
 export type QueuedMessage = z.infer<typeof QueuedMessageSchema>;
 
+// CONVERSATION STATE MODEL
+// ========================
+// Three orthogonal concerns, each with a single owner:
+//
+//   isRunning   (server-authoritative via 'status' broadcasts)
+//     Process is alive. true on spawn, false on close.
+//     Drives: spawn guard, queue processing, sidebar/gallery indicators.
+//
+//   confirmed   (client-only, from 'conversation_created')
+//     Server has acknowledged this conversation. false only in the
+//     optimistic stub between createConversation() and server confirmation.
+//     Drives: input gating ("Waiting for claude...").
+//
+//   isStreaming  (client-only, NOT in this schema — lives in store)
+//     Assistant is actively producing content. true on assistant message
+//     arrival, false on message_complete. Drives: typing dots, pulse animation.
+//
+// Broadcast sequence on normal completion:
+//   1. message_complete  → client sets isStreaming=false (pulsing stops)
+//   2. status:false      → client sets isRunning=false (process done)
+//   3. queue_updated     → client mirrors updated queue
+//   4. processQueue()    → server spawns next message if queued
+//
+// MESSAGE AUTHORITY MODEL
+// =======================
+// Claude conversations: JSONL is authoritative (Claude CLI writes its own file).
+//   The server relays streaming content but the poller's JSONL-parsed messages
+//   are the canonical version. conversations_updated correctly replaces client state.
+//
+// Codex conversations: Server memory is authoritative while a turn is active.
+//   The server builds messages from streaming stdout, while Codex CLI also
+//   self-persists native session files under ~/.codex/sessions.
+//   The poller skips active session IDs and rehydrates idle/reloaded sessions
+//   from persisted files.
 export const ConversationSchema = z.object({
   id: z.string().uuid(),
   messages: z.array(MessageSchema),
   isRunning: z.boolean(),
-  isReady: z.boolean().default(false), // True when CLI process is ready to receive messages
+  // Server has confirmed this conversation exists. Only false in the client's
+  // optimistic stub (between createConversation and conversation_created).
+  // Server always sends true — it only serializes conversations it owns.
+  confirmed: z.boolean().default(true),
   createdAt: z.coerce.date(),
   workingDirectory: z.string(),
   loopConfig: LoopConfigSchema.nullable().optional(),
@@ -211,6 +268,28 @@ export const ConversationSchema = z.object({
   model: ModelIdSchema.optional(),  // Provider-specific model identifier (undefined = provider default)
   subAgents: z.array(SubAgentSchema).default([]),  // Active/recent sub-agents
   queue: z.array(QueuedMessageSchema).default([]),  // Server-owned message queue
+  // Oompa worker detection: true if first user message started with "[oompa]".
+  // Workers are hidden from main Gallery/Sidebar and shown in a dedicated Workers section.
+  // Tag format: [oompa], [oompa:<swarmId>], or [oompa:<swarmId>:<workerId>]
+  isWorker: z.boolean().default(false),
+  // Swarm grouping: all workers from the same oompa swarm run share a swarmId.
+  // Parsed from [oompa:<swarmId>:...] tag on first user message.
+  swarmId: z.string().nullish(),
+  // Worker identity within a swarm (e.g., "w0", "claude-0").
+  // Parsed from [oompa:...:<workerId>] tag on first user message.
+  workerId: z.string().nullish(),
+  // Worker role within the swarm — inferred from first user message content.
+  // "work" = normal task execution, "review" = code review (contains diff + VERDICT),
+  // "fix" = fixing reviewer feedback (starts with "The reviewer found issues").
+  // Null for non-workers or when role can't be determined.
+  workerRole: z.enum(['work', 'review', 'fix']).nullish(),
+  // Optional parent conversation id for provider-native spawned sub-agent threads
+  // (e.g., Codex thread_spawn parent_thread_id).
+  // When present, UI can render this conversation nested under its parent.
+  parentConversationId: z.string().nullish(),
+  // The actual model name from the CLI (e.g., "claude-sonnet-4-5-20250929").
+  // More specific than `provider` which is just "claude", "codex", or "opencode".
+  modelName: z.string().nullish(),
 });
 
 export type Conversation = z.infer<typeof ConversationSchema>;
@@ -383,14 +462,6 @@ export const ErrorMessageSchema = z.object({
 
 export type ErrorMessage = z.infer<typeof ErrorMessageSchema>;
 
-export const ReadyMessageSchema = z.object({
-  type: z.literal('ready'),
-  conversationId: z.string().uuid(),
-  isReady: z.boolean(),
-});
-
-export type ReadyMessage = z.infer<typeof ReadyMessageSchema>;
-
 // Loop Messages (Server → Client)
 export const LoopIterationStartMessageSchema = z.object({
   type: z.literal('loop_iteration_start'),
@@ -476,7 +547,6 @@ export const ServerMessageSchema = z.discriminatedUnion('type', [
   MessageCompleteMessageSchema,
   StatusMessageSchema,
   ErrorMessageSchema,
-  ReadyMessageSchema,
   LoopIterationStartMessageSchema,
   LoopIterationEndMessageSchema,
   LoopCompleteMessageSchema,

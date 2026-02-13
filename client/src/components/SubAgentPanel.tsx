@@ -1,5 +1,5 @@
 import type { SubAgent } from '@claude-web-view/shared';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import './SubAgentPanel.css';
 
 interface SubAgentPanelProps {
@@ -7,18 +7,20 @@ interface SubAgentPanelProps {
 }
 
 /**
- * SubAgentPanel - Displays active Claude sub-agents (Task tool invocations)
+ * SubAgentPanel - Displays active sub-agents from all providers.
  *
- * Shows a tree-like display of running sub-agents with:
+ * Shows a tree-like display with:
  * - Description of the task
  * - Tool use count and token usage
  * - Current action being performed
  * - Status indicator (spinner for running, checkmark for done)
  *
- * Can be collapsed/expanded using Ctrl+O (matches Claude CLI)
+ * Auto-collapses when all agents finish. Can be manually toggled via Ctrl+O.
  */
 export function SubAgentPanel({ subAgents }: SubAgentPanelProps) {
   const [isExpanded, setIsExpanded] = useState(true);
+  // Track whether the user has manually toggled — if so, don't auto-collapse
+  const userToggledRef = useRef(false);
 
   // Filter to show only active (running) sub-agents, plus recently completed ones
   const activeAgents = subAgents.filter(
@@ -29,6 +31,22 @@ export function SubAgentPanel({ subAgents }: SubAgentPanelProps) {
   ).slice(-3); // Show last 3 completed
 
   const displayAgents = [...activeAgents, ...recentlyCompleted];
+
+  // Auto-collapse when all agents complete (unless user manually toggled)
+  const hasRunning = activeAgents.length > 0;
+  const hadRunningRef = useRef(hasRunning);
+  useEffect(() => {
+    if (hadRunningRef.current && !hasRunning && !userToggledRef.current) {
+      // Transition from running → all done: auto-collapse
+      setIsExpanded(false);
+    }
+    if (hasRunning) {
+      // Reset manual toggle flag when new agents start running
+      userToggledRef.current = false;
+      setIsExpanded(true);
+    }
+    hadRunningRef.current = hasRunning;
+  }, [hasRunning]);
 
   // Don't show if no agents
   if (displayAgents.length === 0) {
@@ -44,11 +62,16 @@ export function SubAgentPanel({ subAgents }: SubAgentPanelProps) {
     return tokens.toString();
   };
 
+  const toggleExpanded = () => {
+    userToggledRef.current = true;
+    setIsExpanded((prev) => !prev);
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     // Ctrl+O to toggle expansion (matches Claude CLI behavior)
     if ((e.ctrlKey || e.metaKey) && e.key === 'o') {
       e.preventDefault();
-      setIsExpanded(!isExpanded);
+      toggleExpanded();
     }
   };
 
@@ -61,21 +84,21 @@ export function SubAgentPanel({ subAgents }: SubAgentPanelProps) {
       {/* Header - always visible */}
       <div
         className="subagent-header"
-        onClick={() => setIsExpanded(!isExpanded)}
+        onClick={toggleExpanded}
         role="button"
         tabIndex={0}
         onKeyDown={(e) => {
           if (e.key === 'Enter' || e.key === ' ') {
-            setIsExpanded(!isExpanded);
+            toggleExpanded();
           }
         }}
       >
         <span className={`subagent-indicator ${runningCount > 0 ? 'running' : 'done'}`} />
         <span className="subagent-summary">
           {runningCount > 0 ? (
-            <>Running {runningCount} Task agent{runningCount !== 1 ? 's' : ''}...</>
+            <>Running {runningCount} sub-agent session{runningCount !== 1 ? 's' : ''}...</>
           ) : (
-            <>Task agents completed</>
+            <>Sub-agent sessions completed</>
           )}
         </span>
         <span className="subagent-shortcut">(ctrl+o to {isExpanded ? 'collapse' : 'expand'})</span>

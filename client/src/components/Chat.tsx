@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useShallow } from 'zustand/react/shallow';
 // Solarized Dark theme for syntax highlighting - matches app aesthetic
 import 'highlight.js/styles/base16/solarized-dark.css';
+import type { Conversation as SharedConversation } from '@claude-web-view/shared';
 import { useConversationStore } from '../stores/conversationStore';
 import type { QueuedMessage } from '../stores/conversationStore';
 import { useUIStore, DRAFT_KEY_PREFIX } from '../stores/uiStore';
 import { useSavedPrompts } from '../hooks/useSavedPrompts';
 import { formatTimeAgo } from '../utils/time';
+import { buildUnifiedSubAgents } from '../utils/subAgents';
 import { PromptPalette } from './PromptPalette';
 import { SubAgentPanel } from './SubAgentPanel';
 import { useDropzone } from 'react-dropzone';
@@ -16,6 +19,7 @@ import './Chat.css';
 
 // Stable reference for empty queue — avoids new [] on every render triggering re-renders
 const EMPTY_QUEUE: QueuedMessage[] = [];
+const EMPTY_CHILD_CONVERSATIONS: SharedConversation[] = [];
 
 // Draft persistence: debounce delay for saving textarea content to localStorage
 const DRAFT_SAVE_DELAY_MS = 500;
@@ -56,9 +60,20 @@ export function Chat() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
 
-  // Targeted selectors: only re-render when THIS conversation or its queue changes,
-  // not when any other conversation in the Map updates.
+  // Select active conversation + only its linked child sessions needed for
+  // unified sub-agent rendering (avoids subscribing to all conversations).
   const conversation = useConversationStore((s) => id ? s.conversations.get(id) ?? null : null);
+  const childSessionConversations = useConversationStore(useShallow((s) => {
+    if (!id) return EMPTY_CHILD_CONVERSATIONS;
+    const children: SharedConversation[] = [];
+    for (const candidate of s.conversations.values()) {
+      if (candidate.parentConversationId === id) {
+        children.push(candidate);
+      }
+    }
+    children.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+    return children;
+  }));
   const conversationCount = useConversationStore((s) => s.conversations.size);
   const queue = useConversationStore((s) => {
     if (!id) return EMPTY_QUEUE;
@@ -74,7 +89,7 @@ export function Chat() {
   const interruptAndSend = useConversationStore((s) => s.interruptAndSend);
   const cancelQueuedMessage = useConversationStore((s) => s.cancelQueuedMessage);
   const clearQueue = useConversationStore((s) => s.clearQueue);
-  const stopConversation = useConversationStore((s) => s.stopConversation);
+
 
   const { savePrompt } = useSavedPrompts();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -106,7 +121,7 @@ export function Chat() {
       textarea.value = draft ?? '';
       // Trigger auto-grow height calculation
       textarea.style.height = 'auto';
-      textarea.style.height = `${Math.min(textarea.scrollHeight, 600)}px`;
+      textarea.style.height = `${Math.min(textarea.scrollHeight, 300)}px`;
       setHasInput((draft ?? '').trim().length > 0);
       // Focus the textarea so the user can start typing immediately
       textarea.focus();
@@ -140,17 +155,20 @@ export function Chat() {
 
   // Derive state variables early (before effects and handlers that use them)
   const isLooping = conversation?.loopConfig?.isLooping ?? false;
-  const isReady = conversation?.isReady ?? false;
+  const confirmed = conversation?.confirmed ?? false;
   const isRunning = conversation?.isRunning ?? false;
+  // isStreaming: assistant is actively producing content (typing dots, pulse).
+  // Separate from isRunning (process alive). See state machine docs in shared/src/index.ts.
+  const isStreaming = useConversationStore((s) => id ? s.streamingConversations.has(id) : false);
 
   // Ref to track running state for cleanup — closures in useEffect capture stale values,
   // so we need a ref to read current isRunning when the cleanup function executes.
   const isRunningRef = useRef(isRunning);
   isRunningRef.current = isRunning;
-  // Allow input if ready, even if running (messages will queue)
-  const canInput = isReady && !isLooping;
-  // Messages will be queued if running
-  const willQueue = isReady && isRunning;
+  // Allow input if confirmed, even if running (messages will queue)
+  const canInput = confirmed && !isLooping;
+  // Messages will be queued if running or streaming
+  const willQueue = confirmed && (isRunning || isStreaming);
 
   // File upload: send button enabled when there are files even without text
   const hasContent = hasInput || pendingFiles.length > 0;
@@ -217,16 +235,15 @@ export function Chat() {
       setActiveConversationId(id);
       setUIActiveId(id);
     }
-    // Cleanup when navigating away: stop streaming if running.
-    // Queue is NOT cleared here — it's server-owned state that persists
-    // across navigation. The queue will still be there when the user returns.
+    // Cleanup when navigating away: clear active ID but do NOT kill the process.
+    // Processes are spawned detached (detached: true, unref()) and designed to
+    // complete independently. Killing on navigation causes the bug where switching
+    // tabs too quickly after sending a message terminates the CLI mid-response.
+    // Users can explicitly stop via the stop button if needed.
     return () => {
       setActiveConversationId(null);
-      if (id && isRunningRef.current) {
-        stopConversation(id);
-      }
     };
-  }, [id, setActiveConversationId, setUIActiveId, stopConversation]);
+  }, [id, setActiveConversationId, setUIActiveId]);
 
   // Auto-scroll is now handled by VirtualizedMessageList component
 
@@ -288,7 +305,7 @@ export function Chat() {
 
     // Auto-grow: imperative DOM mutation, no React render
     textarea.style.height = 'auto';
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 600)}px`;
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 300)}px`;
 
     // Only trigger React re-render when the boolean flips
     const has = textarea.value.trim().length > 0;
@@ -297,6 +314,26 @@ export function Chat() {
     // Debounced draft save — restart timer on each keystroke
     if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
     draftTimerRef.current = setTimeout(saveDraft, DRAFT_SAVE_DELAY_MS);
+  };
+
+  // Handle pasted images from clipboard — extract File objects and process like dropped files
+  const handlePaste = async (e: React.ClipboardEvent) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+
+    const files: File[] = [];
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.kind === 'file') {
+        const file = item.getAsFile();
+        if (file) files.push(file);
+      }
+    }
+
+    if (files.length > 0) {
+      e.preventDefault();
+      await handleFilesUpload(files);
+    }
   };
 
   // NOTE: Auto-send logic is handled in the Zustand store (conversationStore).
@@ -365,6 +402,11 @@ export function Chat() {
     return groups;
   }, [conversation?.messages, isLooping]);
 
+  const unifiedSubAgents = useMemo(() => {
+    if (!conversation) return [];
+    return buildUnifiedSubAgents(conversation, childSessionConversations);
+  }, [conversation, childSessionConversations]);
+
   const toggleIterationCollapse = useCallback((iteration: number) => {
     setCollapsedIterations((prev) => {
       const next = new Set(prev);
@@ -416,7 +458,7 @@ export function Chat() {
   // Interrupt: kill running job, send wrapped message with user's adjustment
   const handleInterrupt = () => {
     const textContent = getInputValue().trim();
-    if ((!textContent && pendingFiles.length === 0) || !id || !isReady) return;
+    if ((!textContent && pendingFiles.length === 0) || !id || !confirmed) return;
 
     let content = '';
     if (pendingFiles.length > 0) {
@@ -459,7 +501,7 @@ export function Chat() {
       return;
     }
 
-    if (e.key === 'Enter' && !e.shiftKey && hasContent && isReady) {
+    if (e.key === 'Enter' && !e.shiftKey && hasContent && confirmed) {
       e.preventDefault();
       if (willQueue) {
         // Running — interrupt and send adjusted prompt
@@ -519,7 +561,7 @@ export function Chat() {
           {timeAgo && <span className="chat-time-ago">{timeAgo}</span>}
         </div>
         <div className="header-status">
-          {!isReady && (
+          {!confirmed && (
             <div className="ready-badge waiting">Starting...</div>
           )}
           {isLooping && (
@@ -545,19 +587,19 @@ export function Chat() {
               </button>
             </div>
           )}
-          <div className={`status-indicator ${conversation.isRunning ? 'running' : ''}`} />
+          <div className={`status-indicator ${(isRunning || isStreaming) ? 'running' : ''}`} />
         </div>
       </div>
 
-      {/* Sub-Agent Panel - shows when sub-agents are active */}
-      {conversation.subAgents && conversation.subAgents.length > 0 && (
-        <SubAgentPanel subAgents={conversation.subAgents} />
+      {/* Unified Sub-Agent Panel: provider Task-tool subagents + linked child sessions */}
+      {unifiedSubAgents.length > 0 && (
+        <SubAgentPanel subAgents={unifiedSubAgents} />
       )}
 
       {conversation.messages.length === 0 ? (
         <div className="messages-container">
           <div className="empty-state">
-            {isReady
+            {confirmed
               ? 'Send a message to start the conversation.'
               : `Waiting for ${conversation.provider || 'claude'} to be ready...`}
           </div>
@@ -568,15 +610,16 @@ export function Chat() {
             messageGroups={messageGroups}
             collapsedIterations={collapsedIterations}
             toggleIterationCollapse={toggleIterationCollapse}
-            isRunning={isRunning}
+            isRunning={isStreaming}
             lastMessageRef={lastMessageRef}
             onScrollStateChange={handleScrollStateChange}
             conversationId={id!}
             markMessagesSeen={markMessagesSeen}
             totalMessageCount={conversation.messages.length}
             scrollToBottomRef={scrollToBottomRef}
+            workingDirectory={conversation.workingDirectory}
           />
-          {conversation.isRunning && (
+          {isStreaming && (
             <div className="typing-indicator-overlay">
               <span className="typing-dot" />
               <span className="typing-dot" />
@@ -690,8 +733,9 @@ export function Chat() {
             defaultValue=""
             onInput={handleInput}
             onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
             placeholder={
-              !isReady
+              !confirmed
                 ? `Waiting for ${conversation.provider || 'claude'}...`
                 : willQueue
                   ? 'Enter to interrupt, Tab to queue...'
@@ -731,7 +775,7 @@ export function Chat() {
               type="button"
               className={`send-btn ${willQueue ? 'interrupt-mode' : ''}`}
               onClick={willQueue ? handleInterrupt : handleSend}
-              disabled={!isReady || !hasContent || isLooping}
+              disabled={!confirmed || !hasContent || isLooping}
               title={willQueue ? 'Enter: Interrupt & send | Tab: Queue' : 'Enter: Send | Tab: Queue'}
             >
               {willQueue ? 'Interrupt' : 'Send'}
@@ -778,7 +822,7 @@ export function Chat() {
           if (textareaRef.current) {
             textareaRef.current.value = content;
             textareaRef.current.style.height = 'auto';
-            textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 600)}px`;
+            textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 300)}px`;
             setHasInput(content.trim().length > 0);
           }
         }}

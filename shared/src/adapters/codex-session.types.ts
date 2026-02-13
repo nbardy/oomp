@@ -32,7 +32,17 @@ export const CodexSessionMetaSchema = z.object({
     cwd: z.string(),
     originator: z.string(),
     cli_version: z.string(),
-    source: z.string(),
+    source: z.union([
+      z.string(),
+      z.object({
+        subagent: z.object({
+          thread_spawn: z.object({
+            parent_thread_id: z.string(),
+            depth: z.number().optional(),
+          }).passthrough(),
+        }).passthrough(),
+      }).passthrough(),
+    ]),
     model_provider: z.string(),
     base_instructions: z.object({
       text: z.string(),

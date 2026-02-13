@@ -1,11 +1,13 @@
 import { useState, useRef, useEffect } from 'react';
 import { ColorPalettePicker } from './ColorPalettePicker';
+import { UsagePanel } from './UsagePanel';
 import { useSettingsStore } from '../stores/settingsStore';
 import './ConfigDropdown.css';
 
 export function ConfigDropdown() {
   const [isOpen, setIsOpen] = useState(false);
   const [showPalettePicker, setShowPalettePicker] = useState(false);
+  const [showUsagePanel, setShowUsagePanel] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const settings = useSettingsStore((s) => s.settings);
 
@@ -59,11 +61,29 @@ export function ConfigDropdown() {
             <span className="config-item-label">Color Palette</span>
             <span className="config-item-value">{settings.colorPalette}</span>
           </button>
+          <button
+            type="button"
+            className="config-item"
+            onClick={() => {
+              setShowUsagePanel(true);
+              setIsOpen(false);
+            }}
+          >
+            <span className="config-item-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+              </svg>
+            </span>
+            <span className="config-item-label">Usage</span>
+          </button>
         </div>
       )}
 
       {showPalettePicker && (
         <ColorPalettePicker onClose={() => setShowPalettePicker(false)} />
+      )}
+      {showUsagePanel && (
+        <UsagePanel onClose={() => setShowUsagePanel(false)} />
       )}
     </div>
   );

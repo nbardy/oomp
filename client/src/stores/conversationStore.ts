@@ -1,6 +1,13 @@
+import type {
+  ClientMessage,
+  Conversation,
+  ModelId,
+  Provider,
+  QueuedMessage,
+  ServerMessage,
+} from '@claude-web-view/shared';
 import { create } from 'zustand';
-import type { ClientMessage, Conversation, ModelId, Provider, ServerMessage, QueuedMessage } from '@claude-web-view/shared';
-import { PENDING_CONVERSATIONS_KEY, DRAFT_KEY_PREFIX, useUIStore } from './uiStore';
+import { DRAFT_KEY_PREFIX, PENDING_CONVERSATIONS_KEY, useUIStore } from './uiStore';
 
 // =============================================================================
 // Chunk Buffer
@@ -72,7 +79,7 @@ export type { QueuedMessage } from '@claude-web-view/shared';
 interface PendingConversation {
   id: string;
   workingDirectory: string;
-  provider: 'claude' | 'codex';
+  provider: Provider;
   model?: ModelId;
   createdAt: string; // ISO string for JSON serialization
 }
@@ -108,6 +115,10 @@ interface ConversationStore {
   activeConversationId: string | null;
   wsStatus: 'connecting' | 'connected' | 'disconnected';
   defaultCwd: string;
+  // Client-derived streaming state — see state machine docs in shared/src/index.ts.
+  // true while assistant is producing content (message arrival → message_complete).
+  // Drives typing dots and pulse animation. Separate from isRunning (process alive).
+  streamingConversations: Set<string>;
 
   // Actions
   setActiveConversationId: (id: string | null) => void;
@@ -116,7 +127,12 @@ interface ConversationStore {
   sendMessage: (conversationId: string, content: string) => void;
   stopConversation: (conversationId: string) => void;
   interruptAndSend: (conversationId: string, content: string) => void;
-  startLoop: (conversationId: string, prompt: string, iterations: '5' | '10' | '20', clearContext: boolean) => void;
+  startLoop: (
+    conversationId: string,
+    prompt: string,
+    iterations: '5' | '10' | '20',
+    clearContext: boolean
+  ) => void;
   cancelLoop: (conversationId: string) => void;
   // Queue operations — thin wrappers that send WS commands to the server.
   // Server owns the queue; client mirrors it via queue_updated broadcasts.
@@ -150,6 +166,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
   activeConversationId: null,
   wsStatus: 'connecting',
   defaultCwd: '',
+  streamingConversations: new Set(),
   _send: () => {},
 
   // ---------------------------------------------------------------------------
@@ -162,12 +179,12 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
     const id = crypto.randomUUID();
 
     // Optimistic insert: conversation appears in store immediately (before server round-trip).
-    // isReady: false — user can see the conversation but can't send messages until server confirms.
+    // confirmed: false — user can see the conversation but can't send messages until server confirms.
     const stub: Conversation = {
       id,
       messages: [],
       isRunning: false,
-      isReady: false,
+      confirmed: false,
       createdAt: new Date(),
       workingDirectory,
       provider,
@@ -175,6 +192,12 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
       loopConfig: null,
       subAgents: [],
       queue: [],
+      isWorker: false, // User-created conversations are never workers
+      swarmId: null,
+      workerId: null,
+      workerRole: null,
+      parentConversationId: null,
+      modelName: null,
     };
 
     set((state) => {
@@ -184,7 +207,13 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
     });
 
     // Persist stub to localStorage so it survives page refresh before server confirms
-    savePendingConversation({ id, workingDirectory, provider, model, createdAt: stub.createdAt.toISOString() });
+    savePendingConversation({
+      id,
+      workingDirectory,
+      provider,
+      model,
+      createdAt: stub.createdAt.toISOString(),
+    });
 
     // Tell server to create the real conversation with this ID
     get()._send({ type: 'new_conversation', id, workingDirectory, provider, model });
@@ -293,7 +322,9 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
       case 'init': {
         console.log(`[WS] init: ${data.conversations.length} conversations`);
         data.conversations.forEach((conv) => {
-          console.log(`[WS] init conv ${conv.id.substring(0, 8)}: ${conv.messages.length} messages`);
+          console.log(
+            `[WS] init conv ${conv.id.substring(0, 8)}: ${conv.messages.length} messages`
+          );
         });
         const convMap = new Map<string, Conversation>();
         data.conversations.forEach((conv) => convMap.set(conv.id, conv));
@@ -312,7 +343,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
               id: pc.id,
               messages: [],
               isRunning: false,
-              isReady: false,
+              confirmed: false,
               createdAt: new Date(pc.createdAt),
               workingDirectory: pc.workingDirectory,
               provider: pc.provider,
@@ -320,11 +351,23 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
               loopConfig: null,
               subAgents: [],
               queue: [],
+              isWorker: false, // Pending conversations from localStorage are never workers
+              swarmId: null,
+              workerId: null,
+              workerRole: null,
+              parentConversationId: null,
+              modelName: null,
             };
             convMap.set(pc.id, stub);
             // Re-send creation request after state is set (deferred so _send is available)
             setTimeout(() => {
-              get()._send({ type: 'new_conversation', id: pc.id, workingDirectory: pc.workingDirectory, provider: pc.provider, model: pc.model });
+              get()._send({
+                type: 'new_conversation',
+                id: pc.id,
+                workingDirectory: pc.workingDirectory,
+                provider: pc.provider,
+                model: pc.model,
+              });
             }, 0);
           }
         }
@@ -352,9 +395,8 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
         set((state) => {
           const conversations = new Map(state.conversations);
           conversations.delete(data.conversationId);
-          const activeConversationId = state.activeConversationId === data.conversationId
-            ? null
-            : state.activeConversationId;
+          const activeConversationId =
+            state.activeConversationId === data.conversationId ? null : state.activeConversationId;
           return { conversations, activeConversationId };
         });
         // Clean up localStorage: pending stub + draft
@@ -363,7 +405,9 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
         break;
 
       case 'message': {
-        console.log(`[WS] message event: role=${data.role}, content="${data.content.substring(0, 50)}"`);
+        console.log(
+          `[WS] message event: role=${data.role}, content="${data.content.substring(0, 50)}"`
+        );
         let newMessageIndex: number | null = null;
         set((state) => {
           const conversations = new Map(state.conversations);
@@ -388,6 +432,14 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
                 },
               ],
             });
+
+            // Mark streaming when assistant starts producing content.
+            // Cleared on message_complete. See state machine docs in shared/src/index.ts.
+            if (data.role === 'assistant') {
+              const streaming = new Set(state.streamingConversations);
+              streaming.add(data.conversationId);
+              return { conversations, streamingConversations: streaming };
+            }
           }
           return { conversations };
         });
@@ -425,26 +477,26 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
         break;
 
       case 'error':
-        alert(data.message);
-        break;
-
-      case 'ready':
-        set((state) => {
-          const conversations = new Map(state.conversations);
-          const conv = conversations.get(data.conversationId);
-          if (conv) {
-            conversations.set(data.conversationId, { ...conv, isReady: data.isReady });
-          }
-          return { conversations };
-        });
+        // Validation errors are now shown in the UI (e.g., invalid directory)
+        // Other errors are logged to console but not alerted to avoid popup spam
+        console.error('Server error:', data.message);
         break;
 
       case 'message_complete':
         // Flush any buffered chunks synchronously — message_complete can arrive
         // in the same event loop tick as the last chunk, before rAF fires.
         flushChunkBuffer();
-        // Queue dequeue + next-message processing is handled server-side.
-        // Client will receive queue_updated broadcast.
+        // Clear streaming state — typing dots and pulse animation stop immediately.
+        // isRunning stays true until the server broadcasts status:false (process exit).
+        // See state machine docs in shared/src/index.ts for the full broadcast sequence.
+        set((state) => {
+          const streaming = new Set(state.streamingConversations);
+          if (streaming.has(data.conversationId)) {
+            streaming.delete(data.conversationId);
+            return { streamingConversations: streaming };
+          }
+          return state;
+        });
         break;
 
       case 'loop_iteration_start':
@@ -525,7 +577,9 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
         break;
 
       case 'subagent_start':
-        console.log(`[WS] subagent_start: ${data.subAgent.id.substring(0, 8)} - "${data.subAgent.description.substring(0, 30)}"`);
+        console.log(
+          `[WS] subagent_start: ${data.subAgent.id.substring(0, 8)} - "${data.subAgent.description.substring(0, 30)}"`
+        );
         set((state) => {
           const conversations = new Map(state.conversations);
           const conv = conversations.get(data.conversationId);
@@ -538,7 +592,9 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
         break;
 
       case 'subagent_update':
-        console.log(`[WS] subagent_update: ${data.subAgentId.substring(0, 8)} - action: ${data.currentAction || 'none'}`);
+        console.log(
+          `[WS] subagent_update: ${data.subAgentId.substring(0, 8)} - action: ${data.currentAction || 'none'}`
+        );
         set((state) => {
           const conversations = new Map(state.conversations);
           const conv = conversations.get(data.conversationId);
@@ -562,7 +618,9 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
         break;
 
       case 'subagent_complete':
-        console.log(`[WS] subagent_complete: ${data.subAgentId.substring(0, 8)} - status: ${data.status}`);
+        console.log(
+          `[WS] subagent_complete: ${data.subAgentId.substring(0, 8)} - status: ${data.status}`
+        );
         set((state) => {
           const conversations = new Map(state.conversations);
           const conv = conversations.get(data.conversationId);

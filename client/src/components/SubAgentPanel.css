@@ -1,8 +1,8 @@
 /* =============================================================================
    SubAgentPanel.css - Sub-Agent Display Styles (Solarized Dark Theme)
 
-   Displays Claude's Task tool sub-agents in a tree-like structure.
-   Matches the Claude CLI terminal output style.
+   Displays unified sub-agents in a tree-like structure.
+   Includes provider-native Task sub-agents and linked child sessions.
    ============================================================================= */
 
 .subagent-panel {

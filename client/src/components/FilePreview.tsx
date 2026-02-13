@@ -1,13 +1,20 @@
 /**
- * FilePreview — inline file path preview for images & HTML in chat messages.
+ * FilePreview — inline file path preview for images, HTML & video in chat messages.
  *
- * Detects absolute file paths (in inline code) ending in image/HTML extensions
- * and renders them as: icon + clickable link + hover popup preview.
+ * Detects file paths (in inline code) ending in previewable extensions and renders
+ * them as: icon + clickable link + hover popup preview.
+ *
+ * Supports both absolute paths (`/data/runs/.../00000.png`) and relative paths
+ * (`test_outputs/ssim_debug/render_00000.png`). Relative paths require at least
+ * one `/` directory separator to avoid false-matching bare filenames in prose.
+ * When a `workingDirectory` prop is provided, relative paths are resolved against
+ * it for the API URL while the original relative path is displayed as link text.
  *
  * The popup renders via React Portal to document.body so it escapes parent
  * overflow:hidden / overflow:auto containers (e.g. .messages-container).
  *
- * Wired into react-markdown via the `code` component override in Chat.tsx.
+ * Wired into react-markdown via the `code` component override in
+ * VirtualizedMessageList.tsx.
  */
 
 import { useRef, useState } from 'react';
@@ -20,10 +27,14 @@ const VIDEO_EXTENSIONS = /\.(mp4|webm)$/i;
 
 /**
  * Returns 'image' | 'html' | 'video' | null for a given text string.
- * Only matches absolute paths (starts with `/`, no spaces).
+ * Matches absolute paths (`/foo/bar.png`) and relative paths with at least one
+ * directory separator (`test_outputs/render.png`). Bare filenames like `foo.png`
+ * are rejected to avoid false-matching inline code in prose.
  */
 export function getPreviewType(text: string): 'image' | 'html' | 'video' | null {
-  if (!text.startsWith('/') || text.includes(' ')) return null;
+  if (text.includes(' ')) return null;
+  // Must contain at least one `/` (absolute or relative with directory)
+  if (!text.includes('/')) return null;
   if (IMAGE_EXTENSIONS.test(text)) return 'image';
   if (VIDEO_EXTENSIONS.test(text)) return 'video';
   if (HTML_EXTENSIONS.test(text)) return 'html';
@@ -33,6 +44,8 @@ export function getPreviewType(text: string): 'image' | 'html' | 'video' | null 
 interface FilePreviewProps {
   path: string;
   type: 'image' | 'html' | 'video';
+  /** When set, relative paths are resolved against this directory for the API URL. */
+  workingDirectory?: string;
 }
 
 const TYPE_ICONS = { image: '🖼', html: '🌐', video: '🎬' } as const;
@@ -49,8 +62,11 @@ interface PopupPosition {
   placement: 'above' | 'below';
 }
 
-export function FilePreview({ path, type }: FilePreviewProps) {
-  const fileUrl = `/api/files?path=${encodeURIComponent(path)}`;
+export function FilePreview({ path, type, workingDirectory }: FilePreviewProps) {
+  // Resolve relative paths against workingDirectory for the API URL.
+  // Display text stays as the original `path` the user wrote.
+  const resolvedPath = path.startsWith('/') ? path : `${workingDirectory}/${path}`;
+  const fileUrl = `/api/files?path=${encodeURIComponent(resolvedPath)}`;
   const triggerRef = useRef<HTMLSpanElement>(null);
   const [hovered, setHovered] = useState(false);
   const [position, setPosition] = useState<PopupPosition | null>(null);

@@ -1,0 +1,332 @@
+.usage-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: color-mix(in srgb, black 60%, transparent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+  padding: 20px;
+}
+
+.usage-panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-default);
+  border-radius: 12px;
+  width: 100%;
+  max-width: 520px;
+  max-height: 80vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 50px color-mix(in srgb, black 40%, transparent);
+}
+
+.usage-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-default);
+}
+
+.usage-panel-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.usage-panel-body {
+  padding: 20px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* =============================================================================
+   Rate Limit Gauges — prominent progress bars like Claude/Codex status views
+   ============================================================================= */
+
+.usage-rate-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.usage-rate-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.usage-rate-provider {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.usage-rate-gauge {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.usage-rate-label-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.usage-rate-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.usage-rate-percent {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-rate-bar {
+  height: 8px;
+  background: var(--border-default);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.usage-rate-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.4s ease, background 0.3s ease;
+}
+
+.usage-rate-reset {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* =============================================================================
+   Stats row — compact 4-up summary
+   ============================================================================= */
+
+.usage-stats-row {
+  display: flex;
+  gap: 8px;
+}
+
+.usage-token-stat {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  background: var(--bg-content);
+  border-radius: 6px;
+  border: 1px solid var(--border-default);
+}
+
+.usage-token-value {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-token-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* =============================================================================
+   Range selector
+   ============================================================================= */
+
+.usage-range-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.usage-range-buttons {
+  display: flex;
+  gap: 4px;
+}
+
+.usage-range-btn {
+  padding: 3px 8px;
+  font-size: 11px;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.usage-range-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--text-muted);
+}
+
+.usage-range-btn.active {
+  background: var(--cyan-dim);
+  border-color: var(--cyan);
+  color: var(--text-primary);
+}
+
+/* =============================================================================
+   Daily breakdown
+   ============================================================================= */
+
+.usage-daily-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.usage-daily-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 12px;
+  border-radius: 4px;
+}
+
+.usage-daily-row:hover {
+  background: var(--bg-content);
+}
+
+.usage-daily-date {
+  font-size: 12px;
+  color: var(--text-muted);
+  width: 40px;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-daily-sessions {
+  font-size: 11px;
+  color: var(--text-muted);
+  width: 24px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+/* =============================================================================
+   Shared
+   ============================================================================= */
+
+.usage-breakdown-header {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.usage-conv-cost {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.usage-conv-bar {
+  flex: 1;
+  height: 4px;
+  background: var(--border-default);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.usage-conv-bar-fill {
+  height: 100%;
+  background: var(--cyan);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+/* =============================================================================
+   Provider toggle tabs
+   ============================================================================= */
+
+.usage-tab-row {
+  display: flex;
+  gap: 4px;
+  padding: 2px;
+  background: var(--bg-content);
+  border-radius: 6px;
+  border: 1px solid var(--border-default);
+}
+
+.usage-tab {
+  flex: 1;
+  padding: 5px 8px;
+  font-size: 12px;
+  font-weight: 500;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.usage-tab:hover {
+  color: var(--text-primary);
+}
+
+.usage-tab.active {
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  box-shadow: 0 1px 3px color-mix(in srgb, black 15%, transparent);
+}
+
+/* =============================================================================
+   Session list
+   ============================================================================= */
+
+.usage-session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.usage-session-provider {
+  font-size: 10px;
+  font-weight: 700;
+  width: 16px;
+  text-align: center;
+  flex-shrink: 0;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+.usage-session-id {
+  font-size: 11px;
+  font-family: monospace;
+  color: var(--text-secondary);
+  width: 60px;
+  flex-shrink: 0;
+}
+
+.usage-empty {
+  text-align: center;
+  padding: 24px;
+  color: var(--text-muted);
+  font-size: 13px;
+}

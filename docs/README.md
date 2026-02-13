@@ -9,7 +9,7 @@ This directory contains design documents, feature specifications, and maintenanc
 ### [`agent_client_spec.md`](./agent_client_spec.md)
 **Provider Pattern for CLI Agents**
 
-How the app integrates with multiple CLI agents (Claude, Codex) through a unified `Provider` interface. Covers conversation mode (stateful streaming) vs single-shot mode (one-off tasks).
+How the app integrates with multiple CLI agents (Claude, Codex, OpenCode) through a unified `Provider` interface. Covers conversation mode (stateful streaming) vs single-shot mode (one-off tasks).
 
 **Key sections**:
 - Provider interface definition
@@ -21,14 +21,18 @@ How the app integrates with multiple CLI agents (Claude, Codex) through a unifie
 ## Persistence & State
 
 ### [`persistence_design.md`](./persistence_design.md)
-**JSONL File Format for Conversation History**
+**Conversation Persistence Sources**
 
-How conversations are persisted to `~/.claude-web-view/conversations/{id}.jsonl` files. Covers entry types (user, assistant, system, progress), content blocks (text, thinking, tool use/result), and file polling for external edits.
+How conversation history is loaded from provider-native storage:
+- Claude: `~/.claude/projects/{encoded-path}/*.jsonl`
+- Codex: `~/.codex/sessions/YYYY/MM/DD/*.jsonl`
+- OpenCode: `~/.local/share/opencode/storage/message/{session-id}/*.json` + `part/{message-id}/*.json`
 
 **Key sections**:
 - JSONL entry schema
 - File watching and sync
 - Codex native session import
+- OpenCode message/part import
 
 ---
 
@@ -113,7 +117,7 @@ Comprehensive guide to codebase patterns, edge cases, and troubleshooting. Read 
 
 ### "I want to add a new CLI provider"
 1. Read [`agent_client_spec.md`](./agent_client_spec.md)
-2. See `server/src/providers/claude.ts` and `server/src/providers/codex.ts` as examples
+2. See `server/src/providers/claude.ts`, `server/src/providers/codex.ts`, and `server/src/providers/opencode.ts` as examples
 3. Check [`MAINTENANCE.md`](./MAINTENANCE.md) section "Provider Pattern"
 
 ### "I want to add a new UI feature"

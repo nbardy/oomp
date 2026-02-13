@@ -107,6 +107,25 @@ function isClaudeOutput(data: unknown): data is ClaudeOutput {
 }
 
 // =============================================================================
+// Tool Emoji Map — consistent display for Claude tool names
+// =============================================================================
+
+function claudeToolEmoji(toolName: string): string {
+  switch (toolName) {
+    case 'Read': return '📖';
+    case 'Write': return '✍️';
+    case 'Edit': return '✏️';
+    case 'Bash': return '⚡';
+    case 'Glob': return '📂';
+    case 'Grep': return '🔍';
+    case 'WebSearch': return '🌐';
+    case 'WebFetch': return '🌐';
+    case 'NotebookEdit': return '📓';
+    default: return '🔧';
+  }
+}
+
+// =============================================================================
 // Provider Implementation
 // =============================================================================
 
@@ -236,14 +255,24 @@ const claudeProvider: Provider = {
               const name = json.event.content_block.name || 'unknown';
               const id = (json.event.content_block as { id?: string }).id || '';
 
-              // Special handling for Task tool (sub-agent spawn)
-              // Note: We'll get full input later in content_block_delta events
-              // For now, we emit a tool_use event; server will track it as potential subagent
+              // Special handling for Task tool (sub-agent spawn) — no display text
+              if (name === 'Task') {
+                return { type: 'tool_use', name, input: { _blockId: id } };
+              }
+
+              // AskUserQuestion — no inline emoji text. The full widget is rendered
+              // from the assistant message (see 'assistant' case below).
+              if (name === 'AskUserQuestion') {
+                return { type: 'tool_use', name, input: { _blockId: id } };
+              }
+
+              // Map Claude tool names to emoji + short label
+              const toolEmoji = claudeToolEmoji(name);
               return {
                 type: 'tool_use',
                 name,
-                input: { _blockId: id },  // Pass block ID for correlation
-                displayText: name === 'Task' ? '' : `\n[Using tool: ${name}]\n`,
+                input: { _blockId: id },
+                displayText: `${toolEmoji} ${name}\n`,
               };
             }
             return { type: 'message_start' }; // no-op for text blocks
@@ -266,10 +295,32 @@ const claudeProvider: Provider = {
         // Full assistant message (sent after streaming completes)
         // With --include-partial-messages, we already got the content via stream_event
         // So this is just a confirmation - don't re-emit the text (would cause duplicates!)
+        //
+        // EXCEPTION: AskUserQuestion tool_use blocks carry structured input (questions,
+        // options) that we need to display as an interactive widget. The input arrives
+        // as input_json_delta chunks during streaming (which we discard), so the only
+        // place we get the complete input is here in the full assistant message.
+        // We emit a special marker as text_delta that the client renders as a widget.
         const content = json.message?.content;
         const textBlock = Array.isArray(content) ? content.find((b: ClaudeContentItem) => b.type === 'text') : null;
         const textLength = (textBlock as ClaudeTextContent | null)?.text?.length ?? 0;
-        console.log(`[claude] assistant message arrived (${textLength} chars) - IGNORING to prevent dupe`);
+        console.log(`[claude] assistant message arrived (${textLength} chars) - checking for AskUserQuestion`);
+
+        // Extract AskUserQuestion tool_use blocks and emit as structured markers
+        if (Array.isArray(content)) {
+          const askBlocks = content.filter(
+            (b: ClaudeContentItem) => b.type === 'tool_use' && b.name === 'AskUserQuestion'
+          ) as ClaudeToolUseContent[];
+
+          if (askBlocks.length > 0) {
+            // Emit the first AskUserQuestion block as a text marker.
+            // The client detects this marker and renders an interactive widget.
+            const input = askBlocks[0].input;
+            const marker = `\n<!--ask_user_question:${JSON.stringify(input)}-->\n`;
+            return { type: 'text_delta', text: marker };
+          }
+        }
+
         return { type: 'message_start' };
       }
 
