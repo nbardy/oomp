@@ -21,27 +21,6 @@ import './Chat.css';
 const EMPTY_QUEUE: QueuedMessage[] = [];
 const EMPTY_CHILD_CONVERSATIONS: SharedConversation[] = [];
 
-/** Shorten model names for badge display: "claude-sonnet-4-5-20250929" → "sonnet-4.5" */
-function shortModelName(modelName: string | null | undefined): string | null {
-  if (!modelName) return null;
-  // Claude models - try different patterns
-  // Pattern 1: claude-{variant}-{major}-{minor}-{date} (e.g., claude-opus-4-5-20250929)
-  const claudeMatch1 = modelName.match(/claude-(\w+)-(\d+)-(\d+)-/);
-  if (claudeMatch1) return `${claudeMatch1[1]}-${claudeMatch1[2]}.${claudeMatch1[3]}`;
-  // Pattern 2: claude-{number}-{variant}-{date} (e.g., claude-3-opus-20240229)
-  const claudeMatch2 = modelName.match(/claude-(\d+)-(\w+)-\d{8}/);
-  if (claudeMatch2) return `${claudeMatch2[2]}-${claudeMatch2[1]}`;
-  // Pattern 3: claude-{variant}-{number} (e.g., claude-opus-4)
-  const claudeMatch3 = modelName.match(/claude-(\w+)-(\d+)$/);
-  if (claudeMatch3) return `${claudeMatch3[1]}-${claudeMatch3[2]}`;
-  // Codex models: gpt-{variant}
-  if (modelName.includes('codex') || modelName.includes('gpt')) {
-    const parts = modelName.split('-');
-    return parts.slice(0, 3).join('-');
-  }
-  return modelName.length > 20 ? modelName.substring(0, 20) : modelName;
-}
-
 // Draft persistence: debounce delay for saving textarea content to localStorage
 const DRAFT_SAVE_DELAY_MS = 500;
 
@@ -589,9 +568,7 @@ export function Chat() {
           <span className={`provider-badge provider-${conversation.provider || 'claude'}`}>
             {conversation.provider || 'claude'}
           </span>
-          {shortModelName(conversation.modelName) && (
-            <span className="model-badge">{shortModelName(conversation.modelName)}</span>
-          )}
+          {conversation.modelName && <span className="model-badge">{conversation.modelName}</span>}
           <Link
             className="chat-dir"
             to={`/?folders=${encodeURIComponent(conversation.workingDirectory)}`}
