@@ -1116,6 +1116,7 @@ export function jsonlSessionToConversation(session: JsonlSession): Conversation 
     id: session.sessionId,
     messages,
     isRunning: false,
+    isStreaming: false, // Loaded from disk — process is dead
     confirmed: true,
     createdAt: session.createdAt,
     workingDirectory: session.workingDirectory,
@@ -1141,6 +1142,7 @@ function codexSessionToConversation(session: CodexSession): Conversation | null 
     id: session.sessionId,
     messages,
     isRunning: false,
+    isStreaming: false, // Loaded from disk — process is dead
     confirmed: true,
     createdAt: session.createdAt,
     workingDirectory: session.workingDirectory,
@@ -1166,6 +1168,7 @@ function openCodeSessionToConversation(session: OpenCodeSession): Conversation |
     id: session.sessionId,
     messages,
     isRunning: false,
+    isStreaming: false, // Loaded from disk — process is dead
     confirmed: true,
     createdAt: session.createdAt,
     workingDirectory: session.workingDirectory,

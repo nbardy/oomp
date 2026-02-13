@@ -157,9 +157,7 @@ function WorkerChatPane({
   const conversation = useConversationStore((s) =>
     conversationId ? s.conversations.get(conversationId) ?? null : null,
   );
-  const isStreaming = useConversationStore((s) =>
-    conversationId ? s.streamingConversations.has(conversationId) : false,
-  );
+  const isStreaming = conversation?.isStreaming ?? false;
 
   // ALL hooks before any early return (React hook ordering rule)
   const messageGroups = useMemo((): MessageGroup[] => {

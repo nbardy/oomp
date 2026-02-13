@@ -4,15 +4,15 @@ import { useShallow } from 'zustand/react/shallow';
 // Solarized Dark theme for syntax highlighting - matches app aesthetic
 import 'highlight.js/styles/base16/solarized-dark.css';
 import type { Conversation as SharedConversation } from '@claude-web-view/shared';
+import { useDropzone } from 'react-dropzone';
+import { useSavedPrompts } from '../hooks/useSavedPrompts';
 import { useConversationStore } from '../stores/conversationStore';
 import type { QueuedMessage } from '../stores/conversationStore';
-import { useUIStore, DRAFT_KEY_PREFIX } from '../stores/uiStore';
-import { useSavedPrompts } from '../hooks/useSavedPrompts';
-import { formatTimeAgo } from '../utils/time';
+import { DRAFT_KEY_PREFIX, useUIStore } from '../stores/uiStore';
 import { buildUnifiedSubAgents } from '../utils/subAgents';
+import { formatTimeAgo } from '../utils/time';
 import { PromptPalette } from './PromptPalette';
 import { SubAgentPanel } from './SubAgentPanel';
-import { useDropzone } from 'react-dropzone';
 import { VirtualizedMessageList } from './VirtualizedMessageList';
 import type { MessageGroup } from './VirtualizedMessageList';
 import './Chat.css';
@@ -20,6 +20,27 @@ import './Chat.css';
 // Stable reference for empty queue — avoids new [] on every render triggering re-renders
 const EMPTY_QUEUE: QueuedMessage[] = [];
 const EMPTY_CHILD_CONVERSATIONS: SharedConversation[] = [];
+
+/** Shorten model names for badge display: "claude-sonnet-4-5-20250929" → "sonnet-4.5" */
+function shortModelName(modelName: string | null | undefined): string | null {
+  if (!modelName) return null;
+  // Claude models - try different patterns
+  // Pattern 1: claude-{variant}-{major}-{minor}-{date} (e.g., claude-opus-4-5-20250929)
+  const claudeMatch1 = modelName.match(/claude-(\w+)-(\d+)-(\d+)-/);
+  if (claudeMatch1) return `${claudeMatch1[1]}-${claudeMatch1[2]}.${claudeMatch1[3]}`;
+  // Pattern 2: claude-{number}-{variant}-{date} (e.g., claude-3-opus-20240229)
+  const claudeMatch2 = modelName.match(/claude-(\d+)-(\w+)-\d{8}/);
+  if (claudeMatch2) return `${claudeMatch2[2]}-${claudeMatch2[1]}`;
+  // Pattern 3: claude-{variant}-{number} (e.g., claude-opus-4)
+  const claudeMatch3 = modelName.match(/claude-(\w+)-(\d+)$/);
+  if (claudeMatch3) return `${claudeMatch3[1]}-${claudeMatch3[2]}`;
+  // Codex models: gpt-{variant}
+  if (modelName.includes('codex') || modelName.includes('gpt')) {
+    const parts = modelName.split('-');
+    return parts.slice(0, 3).join('-');
+  }
+  return modelName.length > 20 ? modelName.substring(0, 20) : modelName;
+}
 
 // Draft persistence: debounce delay for saving textarea content to localStorage
 const DRAFT_SAVE_DELAY_MS = 500;
@@ -62,18 +83,20 @@ export function Chat() {
 
   // Select active conversation + only its linked child sessions needed for
   // unified sub-agent rendering (avoids subscribing to all conversations).
-  const conversation = useConversationStore((s) => id ? s.conversations.get(id) ?? null : null);
-  const childSessionConversations = useConversationStore(useShallow((s) => {
-    if (!id) return EMPTY_CHILD_CONVERSATIONS;
-    const children: SharedConversation[] = [];
-    for (const candidate of s.conversations.values()) {
-      if (candidate.parentConversationId === id) {
-        children.push(candidate);
+  const conversation = useConversationStore((s) => (id ? (s.conversations.get(id) ?? null) : null));
+  const childSessionConversations = useConversationStore(
+    useShallow((s) => {
+      if (!id) return EMPTY_CHILD_CONVERSATIONS;
+      const children: SharedConversation[] = [];
+      for (const candidate of s.conversations.values()) {
+        if (candidate.parentConversationId === id) {
+          children.push(candidate);
+        }
       }
-    }
-    children.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
-    return children;
-  }));
+      children.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+      return children;
+    })
+  );
   const conversationCount = useConversationStore((s) => s.conversations.size);
   const queue = useConversationStore((s) => {
     if (!id) return EMPTY_QUEUE;
@@ -89,7 +112,6 @@ export function Chat() {
   const interruptAndSend = useConversationStore((s) => s.interruptAndSend);
   const cancelQueuedMessage = useConversationStore((s) => s.cancelQueuedMessage);
   const clearQueue = useConversationStore((s) => s.clearQueue);
-
 
   const { savePrompt } = useSavedPrompts();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -157,9 +179,9 @@ export function Chat() {
   const isLooping = conversation?.loopConfig?.isLooping ?? false;
   const confirmed = conversation?.confirmed ?? false;
   const isRunning = conversation?.isRunning ?? false;
-  // isStreaming: assistant is actively producing content (typing dots, pulse).
-  // Separate from isRunning (process alive). See state machine docs in shared/src/index.ts.
-  const isStreaming = useConversationStore((s) => id ? s.streamingConversations.has(id) : false);
+  // isStreaming: server-authoritative — assistant is actively producing content.
+  // See state machine docs in shared/src/index.ts.
+  const isStreaming = conversation?.isStreaming ?? false;
 
   // Ref to track running state for cleanup — closures in useEffect capture stale values,
   // so we need a ref to read current isRunning when the cleanup function executes.
@@ -179,40 +201,55 @@ export function Chat() {
   const pendingQueue = queue.filter((m) => m.status === 'pending');
 
   // Upload files immediately on drop/select — returns absolute paths from server
-  const handleFilesUpload = useCallback(async (acceptedFiles: File[]) => {
-    if (!id || acceptedFiles.length === 0) return;
+  const handleFilesUpload = useCallback(
+    async (acceptedFiles: File[]) => {
+      if (!id || acceptedFiles.length === 0) return;
 
-    setIsUploading(true);
-    const formData = new FormData();
-    formData.append('conversationId', id);
-    for (const file of acceptedFiles) {
-      formData.append('files', file);
-    }
+      setIsUploading(true);
+      const formData = new FormData();
+      formData.append('conversationId', id);
+      for (const file of acceptedFiles) {
+        formData.append('files', file);
+      }
 
-    const response = await fetch('/api/upload', {
-      method: 'POST',
-      body: formData,
-    });
+      const response = await fetch('/api/upload', {
+        method: 'POST',
+        body: formData,
+      });
 
-    if (!response.ok) {
-      const error = await response.json();
+      if (!response.ok) {
+        const error = await response.json();
+        setIsUploading(false);
+        throw new Error(`Upload failed: ${error.error}`);
+      }
+
+      const result = (await response.json()) as {
+        files: Array<{
+          originalName: string;
+          absolutePath: string;
+          mimeType: string;
+          size: number;
+        }>;
+      };
+      const withPreviews: PendingFile[] = result.files.map((uploaded, i) => ({
+        ...uploaded,
+        previewUrl: acceptedFiles[i].type.startsWith('image/')
+          ? URL.createObjectURL(acceptedFiles[i])
+          : null,
+      }));
+
+      setPendingFiles((prev) => [...prev, ...withPreviews]);
       setIsUploading(false);
-      throw new Error(`Upload failed: ${error.error}`);
-    }
+    },
+    [id]
+  );
 
-    const result = await response.json() as { files: Array<{ originalName: string; absolutePath: string; mimeType: string; size: number }> };
-    const withPreviews: PendingFile[] = result.files.map((uploaded, i) => ({
-      ...uploaded,
-      previewUrl: acceptedFiles[i].type.startsWith('image/')
-        ? URL.createObjectURL(acceptedFiles[i])
-        : null,
-    }));
-
-    setPendingFiles((prev) => [...prev, ...withPreviews]);
-    setIsUploading(false);
-  }, [id]);
-
-  const { getRootProps, getInputProps, isDragActive, open: openFilePicker } = useDropzone({
+  const {
+    getRootProps,
+    getInputProps,
+    isDragActive,
+    open: openFilePicker,
+  } = useDropzone({
     onDrop: handleFilesUpload,
     noClick: true,
     noKeyboard: true,
@@ -350,7 +387,7 @@ export function Chat() {
     if (!conversation || messageCount === 0) return undefined;
     const last = conversation.messages[messageCount - 1];
     return last.timestamp ? new Date(last.timestamp) : undefined;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messageCount]);
 
   const timeAgo = useTimeAgo(lastMessageTime);
@@ -552,6 +589,9 @@ export function Chat() {
           <span className={`provider-badge provider-${conversation.provider || 'claude'}`}>
             {conversation.provider || 'claude'}
           </span>
+          {shortModelName(conversation.modelName) && (
+            <span className="model-badge">{shortModelName(conversation.modelName)}</span>
+          )}
           <Link
             className="chat-dir"
             to={`/?folders=${encodeURIComponent(conversation.workingDirectory)}`}
@@ -561,9 +601,7 @@ export function Chat() {
           {timeAgo && <span className="chat-time-ago">{timeAgo}</span>}
         </div>
         <div className="header-status">
-          {!confirmed && (
-            <div className="ready-badge waiting">Starting...</div>
-          )}
+          {!confirmed && <div className="ready-badge waiting">Starting...</div>}
           {isLooping && (
             <div className="loop-badge">
               {conversation.loopConfig?.currentIteration}/{conversation.loopConfig?.totalIterations}
@@ -587,14 +625,12 @@ export function Chat() {
               </button>
             </div>
           )}
-          <div className={`status-indicator ${(isRunning || isStreaming) ? 'running' : ''}`} />
+          <div className={`status-indicator ${isRunning || isStreaming ? 'running' : ''}`} />
         </div>
       </div>
 
       {/* Unified Sub-Agent Panel: provider Task-tool subagents + linked child sessions */}
-      {unifiedSubAgents.length > 0 && (
-        <SubAgentPanel subAgents={unifiedSubAgents} />
-      )}
+      {unifiedSubAgents.length > 0 && <SubAgentPanel subAgents={unifiedSubAgents} />}
 
       {conversation.messages.length === 0 ? (
         <div className="messages-container">
@@ -708,7 +744,11 @@ export function Chat() {
             {pendingFiles.map((file) => (
               <div key={file.absolutePath} className="pending-file-item">
                 {file.previewUrl ? (
-                  <img className="pending-file-thumb" src={file.previewUrl} alt={file.originalName} />
+                  <img
+                    className="pending-file-thumb"
+                    src={file.previewUrl}
+                    alt={file.originalName}
+                  />
                 ) : (
                   <span className="pending-file-icon">&#x1F4C4;</span>
                 )}
@@ -716,7 +756,11 @@ export function Chat() {
                 <button
                   type="button"
                   className="pending-file-remove"
-                  onClick={() => setPendingFiles((prev) => prev.filter((f) => f.absolutePath !== file.absolutePath))}
+                  onClick={() =>
+                    setPendingFiles((prev) =>
+                      prev.filter((f) => f.absolutePath !== file.absolutePath)
+                    )
+                  }
                   title="Remove file"
                 >
                   &times;
@@ -776,7 +820,9 @@ export function Chat() {
               className={`send-btn ${willQueue ? 'interrupt-mode' : ''}`}
               onClick={willQueue ? handleInterrupt : handleSend}
               disabled={!confirmed || !hasContent || isLooping}
-              title={willQueue ? 'Enter: Interrupt & send | Tab: Queue' : 'Enter: Send | Tab: Queue'}
+              title={
+                willQueue ? 'Enter: Interrupt & send | Tab: Queue' : 'Enter: Send | Tab: Queue'
+              }
             >
               {willQueue ? 'Interrupt' : 'Send'}
             </button>

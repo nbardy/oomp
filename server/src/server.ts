@@ -148,6 +148,9 @@ class Conversation extends EventEmitter {
   messages: Message[];
   process: ChildProcess | null;
   isRunning: boolean;
+  // Server-authoritative: assistant is actively producing content.
+  // INVARIANT: !isRunning → !isStreaming (enforced in close handler).
+  isStreaming: boolean;
   createdAt: Date;
   workingDirectory: string;
   loopConfig: LoopConfig | null;
@@ -220,6 +223,7 @@ class Conversation extends EventEmitter {
     this.messages = [];
     this.process = null;
     this.isRunning = false;
+    this.isStreaming = false;
     this.createdAt = new Date();
     this.workingDirectory = workingDirectory || process.cwd();
     this.loopConfig = null;
@@ -425,6 +429,9 @@ class Conversation extends EventEmitter {
         }
       }
 
+      // INVARIANT: dead process can't stream. Clear both atomically.
+      // This is the safety net for crash/kill/OOM — all paths that skip message_complete.
+      this.isStreaming = false;
       this.isRunning = false;
       this.process = null;
       this.broadcastStatus();
@@ -486,6 +493,12 @@ class Conversation extends EventEmitter {
             newMsg.loopTotal = this._currentLoopTotal;
           }
           this.messages.push(newMsg);
+          // Mark streaming BEFORE broadcasting the message, so the status
+          // broadcast that follows carries isStreaming=true in the same tick.
+          if (!this.isStreaming) {
+            this.isStreaming = true;
+            this.broadcastStatus();
+          }
           // CRITICAL: Broadcast to client so it knows to create an assistant message
           this.broadcastMessage({
             type: 'message',
@@ -613,10 +626,17 @@ class Conversation extends EventEmitter {
         // Clear pending task tools
         this._pendingTaskTools.clear();
 
+        // Broadcast message_complete BEFORE status(isStreaming=false).
+        // Client's message_complete handler calls flushChunkBuffer() — the last
+        // buffered text must be flushed before isStreaming=false triggers a re-render
+        // that hides typing dots. Preserves the documented broadcast sequence.
         this.broadcastChunk({
           type: 'message_complete',
           conversationId: this.id,
         });
+
+        this.isStreaming = false;
+        this.broadcastStatus();
 
         // Emit for loop engine — replaces fragile monkey-patching of handleOutput.
         // See docs/ralph_loop_design.md §Bug 2.
@@ -692,6 +712,7 @@ class Conversation extends EventEmitter {
       this._isResetting = true;
       this.process.kill();
       this.process = null;
+      this.isStreaming = false;
       this.isRunning = false;
       this.broadcastStatus();
       this._isResetting = false;
@@ -719,6 +740,7 @@ class Conversation extends EventEmitter {
       type: 'status',
       conversationId: this.id,
       isRunning: this.isRunning,
+      isStreaming: this.isStreaming,
     });
   }
 
@@ -791,6 +813,7 @@ class Conversation extends EventEmitter {
       id: this.id,
       messages: this.messages,
       isRunning: this.isRunning,
+      isStreaming: this.isStreaming,
       confirmed: true,
       createdAt: this.createdAt,
       workingDirectory: this.workingDirectory,
@@ -847,6 +870,7 @@ async function runLoop(
     type: 'status',
     conversationId: conv.id,
     isRunning: true,
+    isStreaming: false,
   });
 
   for (let i = 1; i <= totalIterations; i++) {
@@ -2935,6 +2959,7 @@ function startFilePolling(): void {
             type: 'status',
             conversationId,
             isRunning: true,
+            isStreaming: false, // External activity — we don't know if streaming, but safe default
           });
         }
         externallyRunning.set(sessionId, now);
@@ -2952,6 +2977,7 @@ function startFilePolling(): void {
             type: 'status',
             conversationId,
             isRunning: false,
+            isStreaming: false,
           });
         }
       }

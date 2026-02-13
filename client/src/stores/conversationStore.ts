@@ -115,10 +115,6 @@ interface ConversationStore {
   activeConversationId: string | null;
   wsStatus: 'connecting' | 'connected' | 'disconnected';
   defaultCwd: string;
-  // Client-derived streaming state — see state machine docs in shared/src/index.ts.
-  // true while assistant is producing content (message arrival → message_complete).
-  // Drives typing dots and pulse animation. Separate from isRunning (process alive).
-  streamingConversations: Set<string>;
 
   // Actions
   setActiveConversationId: (id: string | null) => void;
@@ -166,7 +162,6 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
   activeConversationId: null,
   wsStatus: 'connecting',
   defaultCwd: '',
-  streamingConversations: new Set(),
   _send: () => {},
 
   // ---------------------------------------------------------------------------
@@ -184,6 +179,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
       id,
       messages: [],
       isRunning: false,
+      isStreaming: false,
       confirmed: false,
       createdAt: new Date(),
       workingDirectory,
@@ -343,6 +339,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
               id: pc.id,
               messages: [],
               isRunning: false,
+              isStreaming: false,
               confirmed: false,
               createdAt: new Date(pc.createdAt),
               workingDirectory: pc.workingDirectory,
@@ -421,6 +418,8 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
             }
             newMessageIndex = conv.messages.length;
             console.log(`[WS] Adding message #${newMessageIndex + 1} (role=${data.role})`);
+            // isStreaming is server-authoritative — set via status broadcast,
+            // which arrives in the same WS frame as this message event.
             conversations.set(data.conversationId, {
               ...conv,
               messages: [
@@ -432,14 +431,6 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
                 },
               ],
             });
-
-            // Mark streaming when assistant starts producing content.
-            // Cleared on message_complete. See state machine docs in shared/src/index.ts.
-            if (data.role === 'assistant') {
-              const streaming = new Set(state.streamingConversations);
-              streaming.add(data.conversationId);
-              return { conversations, streamingConversations: streaming };
-            }
           }
           return { conversations };
         });
@@ -470,7 +461,11 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
           const conversations = new Map(state.conversations);
           const conv = conversations.get(data.conversationId);
           if (conv) {
-            conversations.set(data.conversationId, { ...conv, isRunning: data.isRunning });
+            conversations.set(data.conversationId, {
+              ...conv,
+              isRunning: data.isRunning,
+              isStreaming: data.isStreaming,
+            });
           }
           return { conversations };
         });
@@ -486,17 +481,8 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
         // Flush any buffered chunks synchronously — message_complete can arrive
         // in the same event loop tick as the last chunk, before rAF fires.
         flushChunkBuffer();
-        // Clear streaming state — typing dots and pulse animation stop immediately.
-        // isRunning stays true until the server broadcasts status:false (process exit).
-        // See state machine docs in shared/src/index.ts for the full broadcast sequence.
-        set((state) => {
-          const streaming = new Set(state.streamingConversations);
-          if (streaming.has(data.conversationId)) {
-            streaming.delete(data.conversationId);
-            return { streamingConversations: streaming };
-          }
-          return state;
-        });
+        // isStreaming is now server-authoritative — cleared by the status broadcast
+        // that follows message_complete in the same WS frame. No client-side cleanup needed.
         break;
 
       case 'loop_iteration_start':

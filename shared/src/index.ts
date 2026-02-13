@@ -221,24 +221,27 @@ export type QueuedMessage = z.infer<typeof QueuedMessageSchema>;
 
 // CONVERSATION STATE MODEL
 // ========================
-// Three orthogonal concerns, each with a single owner:
+// Two server-authoritative flags + one client-only flag:
 //
 //   isRunning   (server-authoritative via 'status' broadcasts)
 //     Process is alive. true on spawn, false on close.
 //     Drives: spawn guard, queue processing, sidebar/gallery indicators.
+//
+//   isStreaming  (server-authoritative via 'status' broadcasts)
+//     Assistant is actively producing content. true on first text_delta,
+//     false on message_complete or process close (whichever comes first).
+//     Drives: typing dots, pulse animation, scroll behavior.
+//     INVARIANT: !isRunning → !isStreaming (enforced in close handler).
+//     A dead process cannot produce content.
 //
 //   confirmed   (client-only, from 'conversation_created')
 //     Server has acknowledged this conversation. false only in the
 //     optimistic stub between createConversation() and server confirmation.
 //     Drives: input gating ("Waiting for claude...").
 //
-//   isStreaming  (client-only, NOT in this schema — lives in store)
-//     Assistant is actively producing content. true on assistant message
-//     arrival, false on message_complete. Drives: typing dots, pulse animation.
-//
 // Broadcast sequence on normal completion:
-//   1. message_complete  → client sets isStreaming=false (pulsing stops)
-//   2. status:false      → client sets isRunning=false (process done)
+//   1. message_complete  → server sets isStreaming=false, broadcasts status
+//   2. process close     → server sets isRunning=false, broadcasts status
 //   3. queue_updated     → client mirrors updated queue
 //   4. processQueue()    → server spawns next message if queued
 //
@@ -257,6 +260,10 @@ export const ConversationSchema = z.object({
   id: z.string().uuid(),
   messages: z.array(MessageSchema),
   isRunning: z.boolean(),
+  // Server-authoritative: assistant is actively producing content.
+  // true on first text_delta, false on message_complete or process close.
+  // INVARIANT: !isRunning → !isStreaming (dead process can't stream).
+  isStreaming: z.boolean().default(false),
   // Server has confirmed this conversation exists. Only false in the client's
   // optimistic stub (between createConversation and conversation_created).
   // Server always sends true — it only serializes conversations it owns.
@@ -451,6 +458,7 @@ export const StatusMessageSchema = z.object({
   type: z.literal('status'),
   conversationId: z.string().uuid(),
   isRunning: z.boolean(),
+  isStreaming: z.boolean(),
 });
 
 export type StatusMessage = z.infer<typeof StatusMessageSchema>;
