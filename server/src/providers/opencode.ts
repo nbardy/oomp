@@ -124,19 +124,28 @@ function isOpenCodeSessionId(value: string): boolean {
   return value.startsWith('ses_');
 }
 
+/**
+ * Backward compatibility for older sessions/configs that stored OpenCode models
+ * as `openai/<model>`. Current OpenCode installs generally expose these as
+ * `opencode/<model>`.
+ */
+function normalizeOpenCodeModelId(modelId: string): string {
+  if (modelId.startsWith('openai/')) {
+    return `opencode/${modelId.slice('openai/'.length)}`;
+  }
+  return modelId;
+}
+
 const opencodeProvider: Provider = {
   name: 'opencode',
 
   listModels(): ModelInfo[] {
     return [
-      // Prefer OpenCode-native provider IDs. `openai/*` is not always configured
-      // in local OpenCode installs and can fail with ProviderModelNotFoundError.
-      { id: 'opencode/gpt-5', displayName: 'OpenCode GPT-5', isDefault: true },
-      { id: 'opencode/gpt-5-nano', displayName: 'OpenCode GPT-5 Nano', isDefault: false },
-      { id: 'opencode/big-pickle', displayName: 'OpenCode Big Pickle', isDefault: false },
+      // Prefer OpenCode Zen free-tier models by default.
+      { id: 'opencode/big-pickle', displayName: 'OpenCode Big Pickle (Free)', isDefault: true },
+      { id: 'opencode/gpt-5-nano', displayName: 'OpenCode GPT-5 Nano (Free)', isDefault: false },
       { id: 'opencode/kimi-k2.5-free', displayName: 'OpenCode Kimi K2.5 Free', isDefault: false },
-      { id: 'opencode/minimax-m2.1-free', displayName: 'OpenCode MiniMax M2.1 Free', isDefault: false },
-      { id: 'opencode/trinity-large-preview-free', displayName: 'OpenCode Trinity Large Preview Free', isDefault: false },
+      { id: 'opencode/minimax-m2.5-free', displayName: 'OpenCode MiniMax M2.5 Free', isDefault: false },
     ];
   },
 
@@ -144,11 +153,11 @@ const opencodeProvider: Provider = {
     if (!modelId) return [];
     if (!isOpenCodeModelId(modelId)) {
       throw new Error(
-        `Invalid OpenCode model identifier: ${modelId}. Expected "provider/model" (e.g. openai/gpt-5).`
+        `Invalid OpenCode model identifier: ${modelId}. Expected "provider/model" (e.g. opencode/big-pickle).`
       );
     }
     // OpenCode accepts either --model or -m.
-    return ['-m', modelId];
+    return ['-m', normalizeOpenCodeModelId(modelId)];
   },
 
   getSpawnConfig(sessionId: string, workingDir: string, resume = false, modelId?: string): SpawnConfig {

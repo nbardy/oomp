@@ -36,7 +36,7 @@ export function modelValidationHint(provider: ProviderName): string {
     case 'codex':
       return "one of: 'gpt-5.3-codex-{medium,high,xhigh}', 'gpt-5.3-codex-spark', 'gpt-5.3-codex-spark-{medium,high,xhigh}'";
     case 'opencode':
-      return "'provider/model' format (e.g. 'openai/gpt-5')";
+      return "'provider/model' format (e.g. 'opencode/big-pickle')";
     default:
       return 'a valid model id for the selected provider';
   }

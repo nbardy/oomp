@@ -128,7 +128,7 @@ export type Provider = z.infer<typeof ProviderSchema>;
 // Codex: composite strings encoding model + effort level
 //   e.g. "gpt-5.3-codex-high" → `-m gpt-5.3-codex -c reasoning.effort=high`
 // OpenCode: path-style identifiers passed to `opencode run -m <id>`
-//   e.g. "openai/gpt-5" or "opencode/gpt-5-nano"
+//   e.g. "opencode/big-pickle" or "opencode/gpt-5-nano"
 // We require at least one "/" segment to avoid collisions with Claude/Codex IDs.
 // =============================================================================
 
@@ -151,7 +151,7 @@ const OPENCODE_MODEL_ID_REGEX = /^[a-z0-9][a-z0-9._-]*(?:\/[a-z0-9][a-z0-9._:+-]
 export const OpenCodeModelSchema = z.custom<OpenCodeModel>(
   (value): value is OpenCodeModel => typeof value === 'string' && OPENCODE_MODEL_ID_REGEX.test(value),
   {
-    message: "Invalid OpenCode model identifier. Expected 'provider/model' format (e.g. 'openai/gpt-5').",
+    message: "Invalid OpenCode model identifier. Expected 'provider/model' format (e.g. 'opencode/big-pickle').",
   }
 );
 
