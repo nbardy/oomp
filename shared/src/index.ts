@@ -302,6 +302,44 @@ export const ConversationSchema = z.object({
 export type Conversation = z.infer<typeof ConversationSchema>;
 
 // =============================================================================
+// Oompa Runtime Visibility Contract
+// Used by /api/swarm-runtime and all worker-facing UIs.
+//
+// These are DERIVED view types that the server constructs from process state.
+// For the RAW JSON file shapes written by oompa_loompas (run.json,
+// live-summary.json, iteration logs, review logs, summary.json),
+// see shared/src/generated/oompa-types.ts.
+// =============================================================================
+
+/** Worker activity states used for live worker visibility in Workers views. */
+export type OompaWorkerStatus = 'starting' | 'idle' | 'running' | 'done' | 'error';
+
+export interface OompaRuntimeWorker {
+  id: string;
+  status: OompaWorkerStatus;
+  lastEvent: string;
+}
+
+export interface OompaRuntimeRun {
+  runId: string;
+  swarmId: string | null;
+  isRunning: boolean;
+  totalWorkers: number;
+  activeWorkers: number;
+  doneWorkers: number;
+  configPath: string | null;
+  logFile: string | null;
+  workers: OompaRuntimeWorker[];
+  runCount: number;
+}
+
+export interface OompaRuntimeSnapshot {
+  available: boolean;
+  run: OompaRuntimeRun | null;
+  reason: string | null;
+}
+
+// =============================================================================
 // Client → Server Messages
 // =============================================================================
 
