@@ -202,6 +202,10 @@ export interface OompaSwarmSummary {
      */
     iterations: number;
     merges: number;
+    /**
+     * Number of tasks claimed via CLAIM signal
+     */
+    claims: number;
     rejections: number;
     errors: number;
     recycled: number;

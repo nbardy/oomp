@@ -9,7 +9,8 @@ import path from 'node:path';
 import readline from 'node:readline';
 import type {
   Conversation as ConversationData,
-  LoopConfig,
+  OompaRuntimeSnapshot,
+  OompaWorkerStatus,
   Message,
   ModelId,
   Provider as ProviderName,
@@ -153,7 +154,6 @@ class Conversation extends EventEmitter {
   isStreaming: boolean;
   createdAt: Date;
   workingDirectory: string;
-  loopConfig: LoopConfig | null;
   provider: ProviderName;
   model: ModelId | undefined; // Provider-specific model identifier (e.g. 'opus', 'gpt-5.3-codex-high')
   providerConfig: Provider | null;
@@ -186,9 +186,6 @@ class Conversation extends EventEmitter {
   private _stderrBuffer: string;
   // Tracks whether we received provider JSON events for this process run.
   private _sawStdoutEventThisRun: boolean;
-  // Loop iteration tracking — set by runLoop(), read by handleOutput() to tag messages
-  _currentLoopIteration: number | null;
-  _currentLoopTotal: number | null;
   // When true, close handler is a no-op — resetProcess() handles its own cleanup.
   // Prevents duplicate broadcasts and spurious dequeue during loop context resets.
   private _isResetting: boolean;
@@ -226,7 +223,6 @@ class Conversation extends EventEmitter {
     this.isStreaming = false;
     this.createdAt = new Date();
     this.workingDirectory = workingDirectory || process.cwd();
-    this.loopConfig = null;
     this.provider = provider;
     this.model = model;
     this.isWorker = isWorker;
@@ -244,8 +240,6 @@ class Conversation extends EventEmitter {
     this._stdoutBuffer = '';
     this._stderrBuffer = '';
     this._sawStdoutEventThisRun = false;
-    this._currentLoopIteration = null;
-    this._currentLoopTotal = null;
     this._isResetting = false;
   }
 
@@ -487,11 +481,6 @@ class Conversation extends EventEmitter {
             content: '',
             timestamp: new Date(),
           };
-          // Tag with loop metadata if we're inside a loop iteration
-          if (this._currentLoopIteration !== null && this._currentLoopTotal !== null) {
-            newMsg.loopIteration = this._currentLoopIteration;
-            newMsg.loopTotal = this._currentLoopTotal;
-          }
           this.messages.push(newMsg);
           // Mark streaming BEFORE broadcasting the message, so the status
           // broadcast that follows carries isStreaming=true in the same tick.
@@ -638,9 +627,6 @@ class Conversation extends EventEmitter {
         this.isStreaming = false;
         this.broadcastStatus();
 
-        // Emit for loop engine — replaces fragile monkey-patching of handleOutput.
-        // See docs/ralph_loop_design.md §Bug 2.
-        this.emit('iteration_complete');
         break;
       }
 
@@ -797,7 +783,6 @@ class Conversation extends EventEmitter {
    */
   processQueue(): void {
     if (this.isRunning) return;
-    if (this.loopConfig?.isLooping) return;
     if (this.queue.length === 0) return;
 
     const next = this.queue[0];
@@ -817,7 +802,6 @@ class Conversation extends EventEmitter {
       confirmed: true,
       createdAt: this.createdAt,
       workingDirectory: this.workingDirectory,
-      loopConfig: this.loopConfig,
       provider: this.provider,
       model: this.model,
       subAgents: this.subAgents,
@@ -829,206 +813,6 @@ class Conversation extends EventEmitter {
       parentConversationId: this.parentConversationId,
       modelName: this.modelName,
     };
-  }
-}
-
-// =============================================================================
-// Loop Execution
-// =============================================================================
-
-// RALPH LOOP ENGINE: Executes the same prompt N times in sequence.
-// Each iteration spawns a new CLI process via sendMessage().
-// When clearContext=true, resetProcess() generates a new session ID.
-// All messages stay in conversation.messages[] — iterations are separated
-// by isLoopMarker messages and tagged with loopIteration metadata.
-// Loop iterations do NOT appear as separate conversations in the sidebar.
-// See docs/ralph_loop_design.md for full architecture.
-async function runLoop(
-  conv: Conversation,
-  prompt: string,
-  iterations: string | number,
-  clearContext: boolean
-): Promise<void> {
-  const totalIterations =
-    typeof iterations === 'string' ? Number.parseInt(iterations, 10) : iterations;
-
-  conv.loopConfig = {
-    totalIterations,
-    currentIteration: 0,
-    loopsRemaining: totalIterations,
-    clearContext,
-    prompt,
-    isLooping: true,
-  };
-
-  console.log(
-    `Starting loop for conversation ${conv.id}: ${totalIterations} iterations, clearContext=${clearContext}`
-  );
-
-  // Broadcast initial loop state
-  broadcastToAll({
-    type: 'status',
-    conversationId: conv.id,
-    isRunning: true,
-    isStreaming: false,
-  });
-
-  for (let i = 1; i <= totalIterations; i++) {
-    // Check if cancelled
-    if (!conv.loopConfig?.isLooping) {
-      console.log(`Loop cancelled at iteration ${i}`);
-      break;
-    }
-
-    conv.loopConfig.currentIteration = i;
-    conv.loopConfig.loopsRemaining = totalIterations - i;
-
-    // Clear context if requested (kill process, will restart on send)
-    if (clearContext && i > 1) {
-      console.log(`Clearing context for iteration ${i}`);
-      conv.resetProcess();
-    }
-
-    // Set loop iteration tracking — handleOutput reads these to tag messages
-    conv._currentLoopIteration = i;
-    conv._currentLoopTotal = totalIterations;
-
-    // Send loop start separator
-    broadcastToAll({
-      type: 'loop_iteration_start',
-      conversationId: conv.id,
-      currentIteration: i,
-      totalIterations,
-    });
-
-    // Add separator to messages (tagged with loop metadata)
-    const startMarker: Message = {
-      role: 'system',
-      content: `=== Loop ${i}/${totalIterations} Start ===`,
-      timestamp: new Date(),
-      isLoopMarker: true,
-      loopIteration: i,
-      loopTotal: totalIterations,
-    };
-    conv.messages.push(startMarker);
-
-    // Broadcast the separator as a message
-    broadcastToAll({
-      type: 'message',
-      conversationId: conv.id,
-      role: 'system',
-      content: startMarker.content,
-    });
-
-    // Send the prompt and wait for completion (EventEmitter-based, with timeout)
-    try {
-      await sendMessageAndWait(conv, prompt);
-    } catch (err) {
-      console.error(`[${conv.id}] Loop iteration ${i} failed:`, (err as Error).message);
-      // On timeout/error, add an error marker and continue to next iteration
-      const errorMarker: Message = {
-        role: 'system',
-        content: `=== Loop ${i}/${totalIterations} Error: ${(err as Error).message} ===`,
-        timestamp: new Date(),
-        isLoopMarker: true,
-        loopIteration: i,
-        loopTotal: totalIterations,
-      };
-      conv.messages.push(errorMarker);
-      broadcastToAll({
-        type: 'message',
-        conversationId: conv.id,
-        role: 'system',
-        content: errorMarker.content,
-      });
-    }
-
-    // Add end separator (tagged with loop metadata)
-    const endMarker: Message = {
-      role: 'system',
-      content: `=== Loop ${i}/${totalIterations} End ===`,
-      timestamp: new Date(),
-      isLoopMarker: true,
-      loopIteration: i,
-      loopTotal: totalIterations,
-    };
-    conv.messages.push(endMarker);
-
-    broadcastToAll({
-      type: 'message',
-      conversationId: conv.id,
-      role: 'system',
-      content: endMarker.content,
-    });
-
-    // Broadcast iteration end
-    broadcastToAll({
-      type: 'loop_iteration_end',
-      conversationId: conv.id,
-      currentIteration: i,
-      totalIterations,
-      loopsRemaining: totalIterations - i,
-    });
-
-    console.log(`Completed loop iteration ${i}/${totalIterations}`);
-  }
-
-  // Loop complete — clear loop tracking fields
-  const wasLooping = conv.loopConfig?.isLooping;
-  conv.loopConfig = null;
-  conv._currentLoopIteration = null;
-  conv._currentLoopTotal = null;
-
-  if (wasLooping) {
-    broadcastToAll({
-      type: 'loop_complete',
-      conversationId: conv.id,
-      totalIterations,
-    });
-    console.log(`Loop complete for conversation ${conv.id}`);
-  }
-}
-
-/**
- * Send a message and wait for completion via EventEmitter.
- * Listens for 'iteration_complete' (emitted by handleOutput on message_complete)
- * and also for process close as a fallback. Includes a timeout to prevent
- * infinite hangs if the CLI crashes. See docs/ralph_loop_design.md §Bug 2.
- */
-function sendMessageAndWait(conv: Conversation, prompt: string): Promise<void> {
-  const TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes per iteration
-
-  return new Promise((resolve, reject) => {
-    let settled = false;
-
-    const cleanup = () => {
-      if (settled) return;
-      settled = true;
-      conv.removeListener('iteration_complete', onComplete);
-      clearTimeout(timer);
-    };
-
-    const onComplete = () => {
-      cleanup();
-      // Brief delay before next iteration to let broadcasts propagate
-      setTimeout(resolve, 500);
-    };
-
-    const timer = setTimeout(() => {
-      cleanup();
-      reject(new Error(`Loop iteration timed out after ${TIMEOUT_MS / 1000}s`));
-    }, TIMEOUT_MS);
-
-    conv.on('iteration_complete', onComplete);
-    conv.sendMessage(prompt);
-  });
-}
-
-function cancelLoop(convId: string): void {
-  const conv = conversations.get(convId);
-  if (conv?.loopConfig) {
-    conv.loopConfig.isLooping = false;
-    console.log(`Cancelling loop for conversation ${convId}`);
   }
 }
 
@@ -1060,19 +844,6 @@ interface DeleteConversationData {
   conversationId: string;
 }
 
-interface StartLoopData {
-  type: 'start_loop';
-  conversationId: string;
-  prompt: string;
-  iterations: string | number;
-  clearContext: boolean;
-}
-
-interface CancelLoopData {
-  type: 'cancel_loop';
-  conversationId: string;
-}
-
 interface QueueMessageData {
   type: 'queue_message';
   conversationId: string;
@@ -1101,8 +872,6 @@ type ClientMessageData =
   | SendMessageData
   | StopConversationData
   | DeleteConversationData
-  | StartLoopData
-  | CancelLoopData
   | QueueMessageData
   | CancelQueuedMessageData
   | ClearQueueData
@@ -1260,19 +1029,6 @@ wss.on('connection', (ws: WebSocket) => {
               })
             );
           }
-          break;
-        }
-
-        case 'start_loop': {
-          const conv = conversations.get(data.conversationId);
-          if (conv && !conv.loopConfig?.isLooping) {
-            runLoop(conv, data.prompt, data.iterations, data.clearContext);
-          }
-          break;
-        }
-
-        case 'cancel_loop': {
-          cancelLoop(data.conversationId);
           break;
         }
 
@@ -1654,44 +1410,108 @@ function isUnderKnownProject(resolved: string): boolean {
   return false;
 }
 
-type OompaWorkerStatus = 'starting' | 'idle' | 'running' | 'done' | 'error';
-
-interface OompaRuntimeWorkerState {
+type OompaRunDir = {
   id: string;
-  status: OompaWorkerStatus;
-  lastEvent: string;
+  path: string;
+  mtimeMs: number;
+};
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-interface OompaRuntimeSnapshot {
-  available: boolean;
-  run: {
-    runId: string;
-    swarmId: string | null;
-    isRunning: boolean;
-    totalWorkers: number;
-    activeWorkers: number;
-    doneWorkers: number;
-    configPath: string | null;
-    logFile: string | null;
-    workers: OompaRuntimeWorkerState[];
-  } | null;
-  reason: string | null;
-}
-
-function parseRunMetaFile(metaPath: string): Record<string, string> {
-  const meta: Record<string, string> = {};
-  const content = fs.readFileSync(metaPath, 'utf-8');
-  for (const line of content.split(/\r?\n/)) {
-    if (!line) continue;
-    const idx = line.indexOf('=');
-    if (idx <= 0) continue;
-    const key = line.slice(0, idx).trim();
-    const value = line.slice(idx + 1).trim();
-    meta[key] = value;
+function safeReadJson(filePath: string): Record<string, unknown> | null {
+  try {
+    if (!fs.existsSync(filePath)) return null;
+    return JSON.parse(fs.readFileSync(filePath, 'utf-8')) as Record<string, unknown>;
+  } catch {
+    return null;
   }
-  return meta;
 }
 
+function readLatestRunDir(runsDir: string): OompaRunDir | null {
+  try {
+    const entries = fs
+      .readdirSync(runsDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => {
+        const runPath = path.join(runsDir, entry.name);
+        return {
+          id: entry.name,
+          path: runPath,
+          mtimeMs: fs.statSync(runPath).mtimeMs,
+        };
+      })
+      .sort((a, b) => b.mtimeMs - a.mtimeMs);
+    return entries[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function isTerminalWorkerStatus(status: OompaWorkerStatus): boolean {
+  return status === 'done' || status === 'error';
+}
+
+function normalizeStatus(rawStatus: unknown): OompaWorkerStatus {
+  if (!rawStatus || typeof rawStatus !== 'string') return 'starting';
+  const status = rawStatus.toLowerCase();
+  if (status === 'done' || status === 'completed' || status === 'exhausted') return 'done';
+  if (status === 'idle') return 'idle';
+  if (status === 'error' || status === 'failed' || status === 'fatal') return 'error';
+  if (
+    status === 'working' ||
+    status === 'running' ||
+    status === 'merged' ||
+    status === 'rejected' ||
+    status === 'no-changes' ||
+    status === 'executor-done' ||
+    status === 'starting'
+  ) {
+    return status === 'starting' ? 'starting' : 'running';
+  }
+  return 'starting';
+}
+
+function workerCountFromRun(runData: unknown): number {
+  if (!isObject(runData)) return 0;
+  const workers = runData['workers'];
+  return Array.isArray(workers) ? workers.filter((w) => isObject(w) && typeof w.id === 'string').length : 0;
+}
+
+function readRunWorkerStatuses(runData: unknown): Map<string, OompaWorkerStatus> {
+  const statuses = new Map<string, OompaWorkerStatus>();
+  if (!isObject(runData)) return statuses;
+  const workers = runData['workers'];
+  if (!Array.isArray(workers)) return statuses;
+
+  for (const worker of workers) {
+    if (!isObject(worker)) continue;
+    const id = worker.id;
+    if (typeof id !== 'string' || !id) continue;
+    statuses.set(id, normalizeStatus(worker['status']));
+  }
+
+  return statuses;
+}
+
+function readLiveSummaryStatuses(summary: unknown): Map<string, OompaWorkerStatus> {
+  const statuses = new Map<string, OompaWorkerStatus>();
+  if (!isObject(summary)) return statuses;
+  const workers = summary['workers'];
+  if (!isObject(workers)) return statuses;
+
+  for (const [id, value] of Object.entries(workers)) {
+    if (!isObject(value)) continue;
+    statuses.set(id, normalizeStatus(value['status']));
+  }
+
+  return statuses;
+}
+
+/**
+ * Check if a process is alive via signal 0 (doesn't kill, just tests).
+ */
 function isPidAlive(pidValue: string | undefined): boolean {
   if (!pidValue) return false;
   const pid = Number.parseInt(pidValue, 10);
@@ -1704,139 +1524,115 @@ function isPidAlive(pidValue: string | undefined): boolean {
   }
 }
 
-function classifyWorkerEvent(event: string, previous: OompaWorkerStatus | undefined): OompaWorkerStatus {
-  if (/Received __DONE__ signal|Worker done after/i.test(event)) return 'done';
-  if (/error|exception|failed|fatal/i.test(event)) return 'error';
-  if (/Waiting for tasks|No tasks after/i.test(event)) return 'idle';
-  if (/Starting worker/i.test(event)) return 'starting';
-  if (
-    /Starting iteration|Resuming iteration|Working\.\.\.|Review attempt|Reviewer verdict|Reviewer requested changes|Merging changes|Merge successful|Iteration .* complete/i.test(
-      event,
-    )
-  ) {
-    return 'running';
-  }
-  return previous ?? 'starting';
-}
-
-function safeReadJson(filePath: string): unknown | null {
+/**
+ * Check if the oompa orchestrator process is alive by reading meta files.
+ * Returns true if any meta file's script_pid or bb_pid is alive.
+ */
+function isOompaProcessAlive(projectRoot: string): boolean {
+  const logsDir = path.join(projectRoot, 'oompa', 'logs');
   try {
-    if (!fs.existsSync(filePath)) return null;
-    const raw = fs.readFileSync(filePath, 'utf-8');
-    return JSON.parse(raw);
+    const metaFiles = fs.readdirSync(logsDir)
+      .filter((f) => /^run_.+\.meta$/.test(f))
+      .map((f) => path.join(logsDir, f));
+
+    for (const metaFile of metaFiles) {
+      const content = fs.readFileSync(metaFile, 'utf-8');
+      const meta: Record<string, string> = {};
+      for (const line of content.split(/\r?\n/)) {
+        if (!line) continue;
+        const idx = line.indexOf('=');
+        if (idx <= 0) continue;
+        meta[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+      }
+      if (isPidAlive(meta.script_pid) || isPidAlive(meta.bb_pid)) {
+        return true;
+      }
+    }
   } catch {
-    return null;
+    // No oompa/logs directory — can't confirm liveness from PIDs
   }
+  return false;
 }
 
 function readLatestOompaRuntime(projectRoot: string): OompaRuntimeSnapshot {
-  const logsDir = path.join(projectRoot, 'oompa', 'logs');
-  if (!fs.existsSync(logsDir)) {
-    return { available: false, run: null, reason: 'No oompa/logs directory found' };
+  const runsDir = path.join(projectRoot, 'runs');
+  if (!fs.existsSync(runsDir)) {
+    return { available: false, run: null, reason: 'No runs directory found' };
   }
 
-  const metaFiles = fs
-    .readdirSync(logsDir)
-    .filter((f) => /^run_.+\.meta$/.test(f))
-    .map((f) => path.join(logsDir, f))
-    .sort((a, b) => {
-      const aMtime = fs.statSync(a).mtimeMs;
-      const bMtime = fs.statSync(b).mtimeMs;
-      return bMtime - aMtime;
-    });
-
-  if (metaFiles.length === 0) {
-    return { available: false, run: null, reason: 'No run_*.meta files found' };
+  const latestRun = readLatestRunDir(runsDir);
+  if (!latestRun) {
+    return { available: false, run: null, reason: 'No run directories found' };
   }
 
-  const latestMetaPath = metaFiles[0];
-  const meta = parseRunMetaFile(latestMetaPath);
-  const runId =
-    meta.run_id ??
-    path
-      .basename(latestMetaPath)
-      .replace(/^run_/, '')
-      .replace(/\.meta$/, '');
-
-  const bbAlive = isPidAlive(meta.bb_pid);
-  const scriptAlive = isPidAlive(meta.script_pid);
-  const isRunning = bbAlive || scriptAlive;
-
-  let logFile = meta.log_file ?? null;
-  if (logFile && !path.isAbsolute(logFile)) {
-    logFile = path.join(projectRoot, logFile);
-  }
-  if (!logFile || !fs.existsSync(logFile)) {
-    const guessed = fs
-      .readdirSync(logsDir)
-      .filter((f) => f.includes(runId) && f.endsWith('.log'))
-      .map((f) => path.join(logsDir, f))
-      .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
-    logFile = guessed[0] ?? null;
+  let runCount = 0;
+  try {
+    runCount = fs.readdirSync(runsDir, { withFileTypes: true }).filter((entry) => entry.isDirectory()).length;
+  } catch {
+    runCount = 0;
   }
 
-  let swarmId: string | null = null;
-  let totalWorkers = 0;
-  const workerStates = new Map<string, OompaRuntimeWorkerState>();
+  const runId = latestRun.id;
+  const runFile = path.join(latestRun.path, 'run.json');
+  const summaryFile = path.join(latestRun.path, 'summary.json');
+  const liveSummaryFile = path.join(latestRun.path, 'live-summary.json');
 
-  if (logFile && fs.existsSync(logFile)) {
-    const content = fs.readFileSync(logFile, 'utf-8');
-    for (const line of content.split(/\r?\n/)) {
-      if (!swarmId) {
-        const m = line.match(/Swarm ID:\s*([a-z0-9]+)/i);
-        if (m) swarmId = m[1];
-      }
-      if (!totalWorkers) {
-        const m = line.match(/Workers:\s+(\d+)\s+total/i);
-        if (m) totalWorkers = Number.parseInt(m[1], 10) || 0;
-      }
+  const runData = safeReadJson(runFile) ?? {};
+  const summaryData = safeReadJson(summaryFile);
+  const liveSummaryData = safeReadJson(liveSummaryFile);
 
-      const re = /\[([^\]]+)\]\s([^[]+)/g;
-      let match: RegExpExecArray | null;
-      while ((match = re.exec(line)) !== null) {
-        const workerId = match[1].trim();
-        const event = match[2].trim();
-        if (!/^[a-z][a-z0-9_-]*\d+$/i.test(workerId)) continue;
-        const prev = workerStates.get(workerId);
-        const status = classifyWorkerEvent(event, prev?.status);
-        workerStates.set(workerId, { id: workerId, status, lastEvent: event });
-      }
+  const totalConfiguredWorkers = workerCountFromRun(runData);
+  const runWorkerStatusMap = readRunWorkerStatuses(summaryData);
+  const liveWorkerStatusMap = readLiveSummaryStatuses(liveSummaryData);
+  const workerIds = new Set<string>();
+  for (const id of liveWorkerStatusMap.keys()) workerIds.add(id);
+  if (isObject(runData) && Array.isArray(runData['workers'])) {
+    for (const worker of runData['workers'] as unknown[]) {
+      if (!isObject(worker)) continue;
+      const id = worker.id;
+      if (typeof id === 'string' && id) workerIds.add(id);
     }
   }
+  if (runWorkerStatusMap.size > 0) {
+    for (const id of runWorkerStatusMap.keys()) workerIds.add(id);
+  }
 
-  if (swarmId) {
-    const runJsonPath = path.join(projectRoot, 'runs', swarmId, 'run.json');
-    const runJson = safeReadJson(runJsonPath);
-    if (runJson && typeof runJson === 'object' && runJson !== null) {
-      const maybeWorkers = (runJson as { workers?: Array<{ id?: string }> }).workers;
-      if (Array.isArray(maybeWorkers)) {
-        if (!totalWorkers) totalWorkers = maybeWorkers.length;
-        for (const worker of maybeWorkers) {
-          const workerId = worker?.id;
-          if (typeof workerId !== 'string' || !workerId) continue;
-          if (!workerStates.has(workerId)) {
-            workerStates.set(workerId, {
-              id: workerId,
-              status: isRunning ? 'starting' : 'idle',
-              lastEvent: 'No live event yet',
-            });
-          }
-        }
-      }
+  const totalWorkers = Math.max(totalConfiguredWorkers, workerIds.size);
+  const runPath = runData['config-file'] ? String(runData['config-file']) : null;
+  const swarmId = typeof runData['swarm-id'] === 'string' && runData['swarm-id'] ? String(runData['swarm-id']) : runId;
+
+  // Determine liveness: summary.json is the strongest "done" signal — if it exists,
+  // the swarm is finished regardless of other signals. live-summary.json is deleted
+  // on completion, but for backward-compat with old runs, we check summary.json first.
+  const hasFinalSummary = summaryData !== null;
+  const hasLiveData = liveSummaryData !== null && !hasFinalSummary;
+  const processAlive = !hasFinalSummary && isOompaProcessAlive(projectRoot);
+  const confirmedAlive = hasLiveData || processAlive;
+
+  const workerSnapshots = Array.from(workerIds).map((id) => {
+    let status = liveWorkerStatusMap.get(id) ?? runWorkerStatusMap.get(id) ?? 'starting';
+    // If no live signal confirms the swarm is running, 'starting' workers are actually dead.
+    if (status === 'starting' && !confirmedAlive) {
+      status = 'done';
     }
-  }
+    return {
+      id,
+      status,
+      lastEvent:
+        status === 'starting'
+          ? 'No live state yet'
+          : status === 'done'
+            ? 'Worker completed'
+            : status === 'error'
+              ? 'Worker encountered errors'
+              : 'Worker progress observed',
+    };
+  });
 
-  if (!totalWorkers) totalWorkers = workerStates.size;
-
-  const states = Array.from(workerStates.values()).sort((a, b) => a.id.localeCompare(b.id));
-  const doneWorkers = states.filter((w) => w.status === 'done').length;
-  let activeWorkers = states.filter((w) => w.status !== 'done' && w.status !== 'error').length;
-  if (isRunning && totalWorkers > states.length) {
-    activeWorkers += totalWorkers - states.length;
-  }
-  if (isRunning && totalWorkers > 0 && activeWorkers === 0) {
-    activeWorkers = totalWorkers;
-  }
+  const states = workerSnapshots.sort((a, b) => a.id.localeCompare(b.id));
+  const doneWorkers = states.filter((worker) => isTerminalWorkerStatus(worker.status)).length;
+  const activeWorkers = states.filter((worker) => !isTerminalWorkerStatus(worker.status)).length;
+  const isRunning = confirmedAlive && activeWorkers > 0;
 
   return {
     available: true,
@@ -1847,9 +1643,10 @@ function readLatestOompaRuntime(projectRoot: string): OompaRuntimeSnapshot {
       totalWorkers,
       activeWorkers,
       doneWorkers,
-      configPath: meta.config_path ?? null,
-      logFile,
+      configPath: runPath,
+      logFile: null,
       workers: states,
+      runCount,
     },
     reason: null,
   };
@@ -1925,7 +1722,108 @@ app.get('/api/oompa-config', (req: Request, res: Response) => {
 // runs/{swarm-id}/ written by oompa's agentnet.runs module.
 // =============================================================================
 
-app.get('/api/swarm-runs', (req: Request, res: Response) => {
+/**
+ * Synthesize a SwarmRunSummary from run.json worker configs + review files.
+ *
+ * Keep this synthesis path for compatibility with older runs or environments
+ * where summary.json is missing; otherwise prefer live/final summary data from
+ * runs/{swarm-id}/summary.json when available.
+ *
+ * Verdict buckets:
+ *   "approved"      → merges (iteration merged to main)
+ *   "rejected"      → rejections (iteration permanently rejected)
+ *   "needs-changes" → neither (iteration sent back for another round)
+ */
+async function synthesizeSummary(
+  runDir: string,
+  swarmId: string,
+  run: Record<string, unknown>
+): Promise<Record<string, unknown>> {
+  const reviewsDir = path.join(runDir, 'reviews');
+  let reviewFileNames: string[] = [];
+  try {
+    reviewFileNames = (await fs.promises.readdir(reviewsDir)).filter((f) => f.endsWith('.json'));
+  } catch {
+    // No reviews directory — all workers show as pending
+  }
+
+  // Parse review files async, grouped by worker-id
+  interface ReviewEntry { iteration: number; round: number; verdict: string; timestamp: string }
+  const reviewsByWorker = new Map<string, ReviewEntry[]>();
+
+  await Promise.all(
+    reviewFileNames.map(async (rf) => {
+      try {
+        const content = await fs.promises.readFile(path.join(reviewsDir, rf), 'utf-8');
+        const review = JSON.parse(content);
+        const wid = review['worker-id'];
+        if (!wid) return;
+        if (!reviewsByWorker.has(wid)) reviewsByWorker.set(wid, []);
+        reviewsByWorker.get(wid)!.push(review);
+      } catch {
+        // Skip malformed review files
+      }
+    })
+  );
+
+  const workers = ((run.workers ?? []) as Array<Record<string, unknown>>).map((w) => {
+    const wid = w.id as string;
+    const workerReviews = reviewsByWorker.get(wid) ?? [];
+
+    // Distinct iterations that received at least one review
+    const completedIterations = new Set(workerReviews.map((r) => r.iteration));
+
+    // Final verdict per iteration (last review wins — later rounds overwrite earlier)
+    const iterationVerdicts = new Map<number, string>();
+    for (const r of workerReviews) {
+      iterationVerdicts.set(r.iteration, r.verdict);
+    }
+    let merges = 0;
+    let rejections = 0;
+    let needsChanges = 0;
+    for (const verdict of iterationVerdicts.values()) {
+      if (verdict === 'approved') merges++;
+      else if (verdict === 'rejected') rejections++;
+      else if (verdict === 'needs-changes') needsChanges++;
+    }
+
+    return {
+      id: wid,
+      harness: (w.harness as string) ?? 'default',
+      model: (w.model as string) ?? 'unknown',
+      status: 'completed', // Synthesized from disk — process is done
+      completed: completedIterations.size,
+      iterations: (w.iterations as number) ?? 0,
+      merges,
+      rejections,
+      'needs-changes': needsChanges,
+      errors: 0,
+      'review-rounds-total': workerReviews.length,
+    };
+  });
+
+  // Latest review timestamp → finished-at estimate
+  let latestTimestamp = '';
+  for (const reviews of reviewsByWorker.values()) {
+    for (const r of reviews) {
+      if (r.timestamp && r.timestamp > latestTimestamp) {
+        latestTimestamp = r.timestamp;
+      }
+    }
+  }
+
+  return {
+    'swarm-id': swarmId,
+    'finished-at': latestTimestamp || (run['started-at'] as string) || '',
+    'total-workers': workers.length,
+    'total-completed': workers.reduce((s, w) => s + w.completed, 0),
+    'total-iterations': workers.reduce((s, w) => s + w.iterations, 0),
+    'status-counts': {},
+    workers,
+  };
+}
+
+app.get('/api/swarm-runs', async (req: Request, res: Response) => {
   const dir = req.query.dir as string;
   if (!dir || !dir.startsWith('/')) {
     res.status(400).json({ error: 'Absolute directory path required' });
@@ -1939,36 +1837,49 @@ app.get('/api/swarm-runs', (req: Request, res: Response) => {
   }
 
   const runsDir = path.join(resolved, 'runs');
-  if (!fs.existsSync(runsDir)) {
+  try {
+    await fs.promises.access(runsDir);
+  } catch {
     res.json({ runs: [] });
     return;
   }
 
-  const entries = fs.readdirSync(runsDir, { withFileTypes: true });
-  const runs = entries
-    .filter((e) => e.isDirectory())
-    .map((e) => {
-      const runDir = path.join(runsDir, e.name);
-      const runFile = path.join(runDir, 'run.json');
-      const summaryFile = path.join(runDir, 'summary.json');
+  const entries = await fs.promises.readdir(runsDir, { withFileTypes: true });
+  const runs = await Promise.all(
+    entries
+      .filter((e) => e.isDirectory())
+      .map(async (e) => {
+        const runDir = path.join(runsDir, e.name);
+        const runFile = path.join(runDir, 'run.json');
+        const summaryFile = path.join(runDir, 'summary.json');
 
-      let run = null;
-      let summary = null;
+        let run = null;
+        let summary = null;
 
-      if (fs.existsSync(runFile)) {
-        run = JSON.parse(fs.readFileSync(runFile, 'utf-8'));
-      }
-      if (fs.existsSync(summaryFile)) {
-        summary = JSON.parse(fs.readFileSync(summaryFile, 'utf-8'));
-      }
+        try {
+          run = JSON.parse(await fs.promises.readFile(runFile, 'utf-8'));
+        } catch {
+          // No run.json — skip
+        }
+        try {
+          summary = JSON.parse(await fs.promises.readFile(summaryFile, 'utf-8'));
+        } catch {
+          // No summary.json — synthesize below
+        }
 
-      return { swarmId: e.name, run, summary };
-    })
-    .sort((a, b) => {
-      const aTime = a.run?.['started-at'] ?? '';
-      const bTime = b.run?.['started-at'] ?? '';
-      return bTime.localeCompare(aTime);
-    });
+        if (!summary && run) {
+          summary = await synthesizeSummary(runDir, e.name, run);
+        }
+
+        return { swarmId: e.name, run, summary };
+      })
+  );
+
+  runs.sort((a, b) => {
+    const aTime = a.run?.['started-at'] ?? '';
+    const bTime = b.run?.['started-at'] ?? '';
+    return bTime.localeCompare(aTime);
+  });
 
   res.json({ runs });
 });
