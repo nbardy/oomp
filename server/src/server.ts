@@ -1473,40 +1473,25 @@ function normalizeStatus(rawStatus: unknown): OompaWorkerStatus {
   return 'starting';
 }
 
-function workerCountFromRun(runData: unknown): number {
-  if (!isObject(runData)) return 0;
-  const workers = runData['workers'];
-  return Array.isArray(workers) ? workers.filter((w) => isObject(w) && typeof w.id === 'string').length : 0;
-}
-
-function readRunWorkerStatuses(runData: unknown): Map<string, OompaWorkerStatus> {
-  const statuses = new Map<string, OompaWorkerStatus>();
-  if (!isObject(runData)) return statuses;
-  const workers = runData['workers'];
-  if (!Array.isArray(workers)) return statuses;
-
-  for (const worker of workers) {
-    if (!isObject(worker)) continue;
-    const id = worker.id;
-    if (typeof id !== 'string' || !id) continue;
-    statuses.set(id, normalizeStatus(worker['status']));
+/**
+ * Read all JSON files from a cycles/ (or iterations/) directory.
+ * Returns parsed objects sorted by filename.
+ */
+function readCycleFiles(dir: string): Record<string, unknown>[] {
+  try {
+    const files = fs.readdirSync(dir)
+      .filter(f => f.endsWith('.json'))
+      .sort();
+    return files.map(f => {
+      try {
+        return JSON.parse(fs.readFileSync(path.join(dir, f), 'utf-8'));
+      } catch {
+        return null;
+      }
+    }).filter((x): x is Record<string, unknown> => x !== null);
+  } catch {
+    return [];
   }
-
-  return statuses;
-}
-
-function readLiveSummaryStatuses(summary: unknown): Map<string, OompaWorkerStatus> {
-  const statuses = new Map<string, OompaWorkerStatus>();
-  if (!isObject(summary)) return statuses;
-  const workers = summary['workers'];
-  if (!isObject(workers)) return statuses;
-
-  for (const [id, value] of Object.entries(workers)) {
-    if (!isObject(value)) continue;
-    statuses.set(id, normalizeStatus(value['status']));
-  }
-
-  return statuses;
 }
 
 /**
@@ -1554,6 +1539,11 @@ function isOompaProcessAlive(projectRoot: string): boolean {
   return false;
 }
 
+/**
+ * Event-sourced runtime reader: scans started.json + stopped.json + cycles/
+ * directory to derive swarm state. Uses PID from started.json for liveness.
+ * Backward-compatible with old format (run.json + iterations/).
+ */
 function readLatestOompaRuntime(projectRoot: string): OompaRuntimeSnapshot {
   const runsDir = path.join(projectRoot, 'runs');
   if (!fs.existsSync(runsDir)) {
@@ -1567,83 +1557,105 @@ function readLatestOompaRuntime(projectRoot: string): OompaRuntimeSnapshot {
 
   let runCount = 0;
   try {
-    runCount = fs.readdirSync(runsDir, { withFileTypes: true }).filter((entry) => entry.isDirectory()).length;
-  } catch {
-    runCount = 0;
-  }
+    runCount = fs.readdirSync(runsDir, { withFileTypes: true })
+      .filter(entry => entry.isDirectory()).length;
+  } catch { runCount = 0; }
 
   const runId = latestRun.id;
-  const runFile = path.join(latestRun.path, 'run.json');
-  const summaryFile = path.join(latestRun.path, 'summary.json');
-  const liveSummaryFile = path.join(latestRun.path, 'live-summary.json');
 
-  const runData = safeReadJson(runFile) ?? {};
-  const summaryData = safeReadJson(summaryFile);
-  const liveSummaryData = safeReadJson(liveSummaryFile);
+  // Read event files: started.json (new) or run.json (old backward compat)
+  const startedData = safeReadJson(path.join(latestRun.path, 'started.json'))
+    ?? safeReadJson(path.join(latestRun.path, 'run.json'))
+    ?? {};
+  const stoppedData = safeReadJson(path.join(latestRun.path, 'stopped.json'));
 
-  const totalConfiguredWorkers = workerCountFromRun(runData);
-  const runWorkerStatusMap = readRunWorkerStatuses(summaryData);
-  const liveWorkerStatusMap = readLiveSummaryStatuses(liveSummaryData);
-  const workerIds = new Set<string>();
-  for (const id of liveWorkerStatusMap.keys()) workerIds.add(id);
-  if (isObject(runData) && Array.isArray(runData['workers'])) {
-    for (const worker of runData['workers'] as unknown[]) {
-      if (!isObject(worker)) continue;
-      const id = worker.id;
-      if (typeof id === 'string' && id) workerIds.add(id);
+  // Scan cycles/ (new) or iterations/ (old backward compat)
+  const cyclesDir = path.join(latestRun.path, 'cycles');
+  const iterationsDir = path.join(latestRun.path, 'iterations');
+  const scanDir = fs.existsSync(cyclesDir) ? cyclesDir :
+                  fs.existsSync(iterationsDir) ? iterationsDir : null;
+
+  const cycleFiles = scanDir ? readCycleFiles(scanDir) : [];
+
+  // Worker IDs from started.json config
+  const configuredWorkers: string[] = [];
+  if (isObject(startedData) && Array.isArray(startedData['workers'])) {
+    for (const w of startedData['workers'] as unknown[]) {
+      if (isObject(w) && typeof w.id === 'string') configuredWorkers.push(w.id);
     }
   }
-  if (runWorkerStatusMap.size > 0) {
-    for (const id of runWorkerStatusMap.keys()) workerIds.add(id);
+
+  // Latest cycle per worker (handles both 'cycle' and 'iteration' field names)
+  const latestCycleByWorker = new Map<string, Record<string, unknown>>();
+  for (const cycle of cycleFiles) {
+    const wid = cycle['worker-id'] as string;
+    if (!wid) continue;
+    const existing = latestCycleByWorker.get(wid);
+    const cycleNum = (cycle['cycle'] ?? cycle['iteration'] ?? 0) as number;
+    const existingNum = (existing?.['cycle'] ?? existing?.['iteration'] ?? 0) as number;
+    if (!existing || cycleNum > existingNum) {
+      latestCycleByWorker.set(wid, cycle);
+    }
   }
 
-  const totalWorkers = Math.max(totalConfiguredWorkers, workerIds.size);
-  const runPath = runData['config-file'] ? String(runData['config-file']) : null;
-  const swarmId = typeof runData['swarm-id'] === 'string' && runData['swarm-id'] ? String(runData['swarm-id']) : runId;
+  // Union of all known worker IDs
+  const workerIds = new Set<string>([...configuredWorkers, ...latestCycleByWorker.keys()]);
+  const totalWorkers = Math.max(workerIds.size, configuredWorkers.length);
 
-  // Determine liveness: summary.json is the strongest "done" signal — if it exists,
-  // the swarm is finished regardless of other signals. live-summary.json is deleted
-  // on completion, but for backward-compat with old runs, we check summary.json first.
-  const hasFinalSummary = summaryData !== null;
-  const hasLiveData = liveSummaryData !== null && !hasFinalSummary;
-  const processAlive = !hasFinalSummary && isOompaProcessAlive(projectRoot);
-  const confirmedAlive = hasLiveData || processAlive;
+  // Liveness: stopped.json present = swarm finished.
+  // Otherwise check PID from started.json, with isOompaProcessAlive() as fallback
+  // for old runs that don't have PID in started.json.
+  const swarmStopped = stoppedData !== null;
+  const pid = isObject(startedData) ? startedData['pid'] : null;
+  const pidAlive = !swarmStopped && typeof pid === 'number' && isPidAlive(String(pid));
+  const fallbackAlive = !swarmStopped && !pidAlive && isOompaProcessAlive(projectRoot);
+  const isLive = !swarmStopped && (pidAlive || fallbackAlive);
 
-  const workerSnapshots = Array.from(workerIds).map((id) => {
-    let status = liveWorkerStatusMap.get(id) ?? runWorkerStatusMap.get(id) ?? 'starting';
-    // If no live signal confirms the swarm is running, 'starting' workers are actually dead.
-    if (status === 'starting' && !confirmedAlive) {
+  // Build worker snapshots from cycle data
+  const swarmId = typeof startedData['swarm-id'] === 'string' ? startedData['swarm-id'] : runId;
+  const configPath = startedData['config-file'] ? String(startedData['config-file']) : null;
+
+  const workerSnapshots = Array.from(workerIds).map(id => {
+    const cycle = latestCycleByWorker.get(id);
+    let status: OompaWorkerStatus;
+
+    if (cycle) {
+      const outcome = cycle['outcome'] as string;
+      status = normalizeStatus(outcome);
+    } else if (isLive) {
+      status = 'starting';
+    } else {
       status = 'done';
     }
+
+    // If swarm is stopped, force all non-terminal workers to done
+    if (swarmStopped && status !== 'done' && status !== 'error') {
+      status = 'done';
+    }
+
     return {
       id,
       status,
-      lastEvent:
-        status === 'starting'
-          ? 'No live state yet'
-          : status === 'done'
-            ? 'Worker completed'
-            : status === 'error'
-              ? 'Worker encountered errors'
-              : 'Worker progress observed',
+      lastEvent: cycle
+        ? `Cycle ${cycle['cycle'] ?? cycle['iteration'] ?? '?'}: ${cycle['outcome'] ?? 'unknown'}`
+        : swarmStopped ? 'Worker completed' : isLive ? 'Starting' : 'No data',
     };
   });
 
   const states = workerSnapshots.sort((a, b) => a.id.localeCompare(b.id));
-  const doneWorkers = states.filter((worker) => isTerminalWorkerStatus(worker.status)).length;
-  const activeWorkers = states.filter((worker) => !isTerminalWorkerStatus(worker.status)).length;
-  const isRunning = confirmedAlive && activeWorkers > 0;
+  const doneWorkers = states.filter(w => isTerminalWorkerStatus(w.status)).length;
+  const activeWorkers = states.filter(w => !isTerminalWorkerStatus(w.status)).length;
 
   return {
     available: true,
     run: {
       runId,
       swarmId,
-      isRunning,
+      isRunning: isLive && activeWorkers > 0,
       totalWorkers,
       activeWorkers,
       doneWorkers,
-      configPath: runPath,
+      configPath,
       logFile: null,
       workers: states,
       runCount,
@@ -1723,11 +1735,12 @@ app.get('/api/oompa-config', (req: Request, res: Response) => {
 // =============================================================================
 
 /**
- * Synthesize a SwarmRunSummary from run.json worker configs + review files.
+ * Synthesize a SwarmRunSummary from run.json (or started.json) worker configs + review files.
  *
  * Keep this synthesis path for compatibility with older runs or environments
  * where summary.json is missing; otherwise prefer live/final summary data from
  * runs/{swarm-id}/summary.json when available.
+ * NOTE: New event-sourced runs use started.json instead of run.json.
  *
  * Verdict buckets:
  *   "approved"      → merges (iteration merged to main)
@@ -1850,16 +1863,22 @@ app.get('/api/swarm-runs', async (req: Request, res: Response) => {
       .filter((e) => e.isDirectory())
       .map(async (e) => {
         const runDir = path.join(runsDir, e.name);
-        const runFile = path.join(runDir, 'run.json');
+        const startedFile = path.join(runDir, 'started.json');
+        const runFile = path.join(runDir, 'run.json'); // backward compat
         const summaryFile = path.join(runDir, 'summary.json');
 
         let run = null;
         let summary = null;
 
+        // New format: started.json; old format: run.json
         try {
-          run = JSON.parse(await fs.promises.readFile(runFile, 'utf-8'));
+          run = JSON.parse(await fs.promises.readFile(startedFile, 'utf-8'));
         } catch {
-          // No run.json — skip
+          try {
+            run = JSON.parse(await fs.promises.readFile(runFile, 'utf-8'));
+          } catch {
+            // No started.json or run.json — skip
+          }
         }
         try {
           summary = JSON.parse(await fs.promises.readFile(summaryFile, 'utf-8'));
