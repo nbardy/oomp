@@ -1753,15 +1753,52 @@ async function synthesizeSummary(
   swarmId: string,
   run: Record<string, unknown>
 ): Promise<Record<string, unknown>> {
+  // Read cycle files — these are the primary source of truth for worker progress
+  const cyclesDir = path.join(runDir, 'cycles');
+  const iterationsDir = path.join(runDir, 'iterations');
+  let cycleFileDir: string | null = null;
+  try {
+    await fs.promises.access(cyclesDir);
+    cycleFileDir = cyclesDir;
+  } catch {
+    try {
+      await fs.promises.access(iterationsDir);
+      cycleFileDir = iterationsDir;
+    } catch {
+      // No cycle data at all
+    }
+  }
+
+  interface CycleEntry { 'worker-id': string; cycle?: number; iteration?: number; outcome: string; timestamp: string }
+  const cyclesByWorker = new Map<string, CycleEntry[]>();
+
+  if (cycleFileDir) {
+    const cycleFileNames = (await fs.promises.readdir(cycleFileDir)).filter((f) => f.endsWith('.json'));
+    await Promise.all(
+      cycleFileNames.map(async (cf) => {
+        try {
+          const content = await fs.promises.readFile(path.join(cycleFileDir!, cf), 'utf-8');
+          const cycle = JSON.parse(content);
+          const wid = cycle['worker-id'];
+          if (!wid) return;
+          if (!cyclesByWorker.has(wid)) cyclesByWorker.set(wid, []);
+          cyclesByWorker.get(wid)!.push(cycle);
+        } catch {
+          // Skip malformed cycle files
+        }
+      })
+    );
+  }
+
+  // Read review files
   const reviewsDir = path.join(runDir, 'reviews');
   let reviewFileNames: string[] = [];
   try {
     reviewFileNames = (await fs.promises.readdir(reviewsDir)).filter((f) => f.endsWith('.json'));
   } catch {
-    // No reviews directory — all workers show as pending
+    // No reviews directory
   }
 
-  // Parse review files async, grouped by worker-id
   interface ReviewEntry { iteration: number; round: number; verdict: string; timestamp: string }
   const reviewsByWorker = new Map<string, ReviewEntry[]>();
 
@@ -1780,44 +1817,99 @@ async function synthesizeSummary(
     })
   );
 
+  // Check liveness: stopped.json present = done, else check PID
+  const stoppedFile = path.join(runDir, 'stopped.json');
+  let isStopped = false;
+  try {
+    await fs.promises.access(stoppedFile);
+    isStopped = true;
+  } catch {
+    // No stopped.json — check PID
+  }
+
+  let isLive = false;
+  if (!isStopped) {
+    const pid = run['pid'];
+    if (typeof pid === 'number') {
+      isLive = isPidAlive(String(pid));
+    }
+  }
+
   const workers = ((run.workers ?? []) as Array<Record<string, unknown>>).map((w) => {
     const wid = w.id as string;
+    const workerCycles = cyclesByWorker.get(wid) ?? [];
     const workerReviews = reviewsByWorker.get(wid) ?? [];
 
-    // Distinct iterations that received at least one review
-    const completedIterations = new Set(workerReviews.map((r) => r.iteration));
+    // Count outcomes from cycle data
+    let merges = 0;
+    let rejections = 0;
+    let errors = 0;
+    let latestOutcome: string | null = null;
+    let latestCycleNum = 0;
 
-    // Final verdict per iteration (last review wins — later rounds overwrite earlier)
+    for (const c of workerCycles) {
+      const num = (c.cycle ?? c.iteration ?? 0) as number;
+      if (num > latestCycleNum) {
+        latestCycleNum = num;
+        latestOutcome = c.outcome;
+      }
+      if (c.outcome === 'merged') merges++;
+      else if (c.outcome === 'rejected') rejections++;
+      else if (c.outcome === 'error') errors++;
+    }
+
+    // Derive status from what we actually know — never fabricate
+    let status: string;
+    if (workerCycles.length === 0 && !isLive) {
+      status = 'unknown';  // No data and not running — don't pretend we know
+    } else if (workerCycles.length === 0 && isLive) {
+      status = 'starting';
+    } else if (latestOutcome === 'done' || latestOutcome === 'executor-done') {
+      status = 'completed';
+    } else if (latestOutcome === 'error') {
+      status = 'error';
+    } else if (isLive) {
+      status = 'running';
+    } else if (isStopped) {
+      status = 'completed';
+    } else {
+      status = 'unknown';  // Not running, no stopped.json, ambiguous — say so
+    }
+
+    // needs-changes from reviews
+    let needsChanges = 0;
     const iterationVerdicts = new Map<number, string>();
     for (const r of workerReviews) {
       iterationVerdicts.set(r.iteration, r.verdict);
     }
-    let merges = 0;
-    let rejections = 0;
-    let needsChanges = 0;
     for (const verdict of iterationVerdicts.values()) {
-      if (verdict === 'approved') merges++;
-      else if (verdict === 'rejected') rejections++;
-      else if (verdict === 'needs-changes') needsChanges++;
+      if (verdict === 'needs-changes') needsChanges++;
     }
 
     return {
       id: wid,
       harness: (w.harness as string) ?? 'default',
       model: (w.model as string) ?? 'unknown',
-      status: 'completed', // Synthesized from disk — process is done
-      completed: completedIterations.size,
+      status,
+      completed: latestCycleNum,
       iterations: (w.iterations as number) ?? 0,
       merges,
       rejections,
       'needs-changes': needsChanges,
-      errors: 0,
+      errors,
       'review-rounds-total': workerReviews.length,
     };
   });
 
-  // Latest review timestamp → finished-at estimate
+  // Timestamps: only report what we actually have
   let latestTimestamp = '';
+  for (const cycles of cyclesByWorker.values()) {
+    for (const c of cycles) {
+      if (c.timestamp && c.timestamp > latestTimestamp) {
+        latestTimestamp = c.timestamp;
+      }
+    }
+  }
   for (const reviews of reviewsByWorker.values()) {
     for (const r of reviews) {
       if (r.timestamp && r.timestamp > latestTimestamp) {
@@ -1828,9 +1920,10 @@ async function synthesizeSummary(
 
   return {
     'swarm-id': swarmId,
-    'finished-at': latestTimestamp || (run['started-at'] as string) || '',
+    // Don't fabricate finished-at from started-at — null means "we don't know"
+    'finished-at': isStopped ? (latestTimestamp || null) : (isLive ? null : (latestTimestamp || null)),
     'total-workers': workers.length,
-    'total-completed': workers.reduce((s, w) => s + w.completed, 0),
+    'total-completed': workers.filter((w) => w.status === 'completed').length,
     'total-iterations': workers.reduce((s, w) => s + w.iterations, 0),
     'status-counts': {},
     workers,
