@@ -2025,6 +2025,103 @@ app.get('/api/swarm-runtime', (req: Request, res: Response) => {
   res.json(snapshot);
 });
 
+/**
+ * Send stop (SIGTERM) or kill (SIGKILL) signal to a running oompa swarm.
+ * - 'stop': graceful — workers finish current cycle then exit
+ * - 'kill': immediate — SIGKILL bypasses shutdown hooks, so we write stopped.json
+ */
+app.post('/api/swarm-signal', (req: Request, res: Response) => {
+  const { dir, signal, swarmId } = req.body as {
+    dir?: string;
+    signal?: 'stop' | 'kill';
+    swarmId?: string;
+  };
+
+  if (!dir || !dir.startsWith('/')) {
+    res.status(400).json({ ok: false, message: 'Absolute directory path required' });
+    return;
+  }
+  if (signal !== 'stop' && signal !== 'kill') {
+    res.status(400).json({ ok: false, message: 'signal must be "stop" or "kill"' });
+    return;
+  }
+
+  const resolved = path.resolve(dir);
+  if (!isUnderKnownProject(resolved)) {
+    res.status(403).json({ ok: false, message: 'Directory not associated with any conversation' });
+    return;
+  }
+
+  // Find the run directory
+  const runsDir = path.join(resolved, 'runs');
+  let runDir: string;
+  if (swarmId) {
+    // Prevent path traversal — swarmId must not escape runsDir
+    const candidate = path.resolve(runsDir, swarmId);
+    if (!candidate.startsWith(runsDir + path.sep)) {
+      res.status(400).json({ ok: false, message: 'Invalid swarmId' });
+      return;
+    }
+    runDir = candidate;
+  } else {
+    const latest = readLatestRunDir(runsDir);
+    if (!latest) {
+      res.status(404).json({ ok: false, message: 'No runs found' });
+      return;
+    }
+    runDir = latest.path;
+  }
+
+  // Check if already stopped
+  const stoppedPath = path.join(runDir, 'stopped.json');
+  if (fs.existsSync(stoppedPath)) {
+    res.json({ ok: false, message: 'Swarm already stopped' });
+    return;
+  }
+
+  // Read PID from started.json
+  const startedData = safeReadJson(path.join(runDir, 'started.json')) as Record<string, unknown> | null;
+  const pid = startedData?.pid as number | undefined;
+  if (!pid || !Number.isFinite(pid) || pid <= 0) {
+    res.json({ ok: false, message: 'No valid PID found in started.json' });
+    return;
+  }
+
+  // Check if PID is alive
+  if (!isPidAlive(String(pid))) {
+    // Stale PID — write stopped.json to clean up
+    const stoppedEvent = {
+      'swarm-id': startedData?.['swarm-id'] ?? 'unknown',
+      'stopped-at': new Date().toISOString(),
+      reason: 'interrupted',
+      error: 'Process was not running (stale PID)',
+    };
+    fs.writeFileSync(stoppedPath, JSON.stringify(stoppedEvent, null, 2));
+    res.json({ ok: true, message: 'Swarm was not running (stale PID). Marked as stopped.' });
+    return;
+  }
+
+  // Send the signal
+  try {
+    if (signal === 'stop') {
+      process.kill(pid, 'SIGTERM');
+      res.json({ ok: true, message: `SIGTERM sent to PID ${pid}. Workers will finish current cycle.` });
+    } else {
+      process.kill(pid, 'SIGKILL');
+      // SIGKILL bypasses shutdown hooks — write stopped.json ourselves
+      const stoppedEvent = {
+        'swarm-id': startedData?.['swarm-id'] ?? 'unknown',
+        'stopped-at': new Date().toISOString(),
+        reason: 'interrupted',
+      };
+      fs.writeFileSync(stoppedPath, JSON.stringify(stoppedEvent, null, 2));
+      res.json({ ok: true, message: `SIGKILL sent to PID ${pid}. Swarm terminated.` });
+    }
+  } catch (err) {
+    res.status(500).json({ ok: false, message: `Failed to send signal: ${err}` });
+  }
+});
+
 app.get('/api/swarm-reviews', (req: Request, res: Response) => {
   const dir = req.query.dir as string;
   const swarmId = req.query.swarmId as string;
