@@ -40,6 +40,22 @@ interface OompaConfig {
 // Helpers
 // =============================================================================
 
+async function sendSwarmSignal(
+  projectRoot: string,
+  signal: 'stop' | 'kill',
+): Promise<{ ok: boolean; message: string }> {
+  const res = await fetch('/api/swarm-signal', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dir: projectRoot, signal }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({})) as { error?: string; message?: string };
+    throw new Error(body.error ?? body.message ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 /** Shorten model names for badge display: "claude-sonnet-4-5-20250929" → "sonnet-4.5" */
 function shortModelName(modelName: string | null | undefined): string | null {
   if (!modelName) return null;
@@ -650,6 +666,46 @@ export function SwarmDetail() {
               {displayRunning > 0 ? `${displayRunning} running` : 'All idle'}
             </span>
           </div>
+          {displayRunning > 0 && (
+            <div style={{ display: 'flex', gap: '6px', marginLeft: '8px' }}>
+              <button
+                style={{
+                  padding: '3px 10px', borderRadius: '4px', fontSize: '11px', fontWeight: 500,
+                  cursor: 'pointer', border: '1px solid var(--yellow, #b58900)',
+                  background: 'var(--bg-card)', color: 'var(--yellow, #b58900)',
+                }}
+                title="Stop swarm gracefully (finish current cycle)"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (confirm('Stop swarm? Workers will finish their current cycle and exit.')) {
+                    sendSwarmSignal(projectRoot, 'stop')
+                      .then((r) => { if (!r.ok) alert(`Stop failed: ${r.message}`); })
+                      .catch((err: Error) => alert(`Stop failed: ${err.message}`));
+                  }
+                }}
+              >
+                Stop
+              </button>
+              <button
+                style={{
+                  padding: '3px 10px', borderRadius: '4px', fontSize: '11px', fontWeight: 500,
+                  cursor: 'pointer', border: '1px solid var(--red, #dc322f)',
+                  background: 'var(--bg-card)', color: 'var(--red, #dc322f)',
+                }}
+                title="Kill swarm immediately (SIGKILL)"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (confirm('Kill swarm immediately? This will forcibly terminate all workers.')) {
+                    sendSwarmSignal(projectRoot, 'kill')
+                      .then((r) => { if (!r.ok) alert(`Kill failed: ${r.message}`); })
+                      .catch((err: Error) => alert(`Kill failed: ${err.message}`));
+                  }
+                }}
+              >
+                Kill
+              </button>
+            </div>
+          )}
           <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
             {runtimeTotalWorkers} workers &middot; {allWorkers.length} sessions
             ({workCount} exec, {reviewCount} review, {fixCount} fix)
