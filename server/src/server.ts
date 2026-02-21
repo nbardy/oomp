@@ -175,6 +175,9 @@ class Conversation extends EventEmitter {
   parentConversationId: string | null;
   // Full model name from CLI (e.g., "claude-sonnet-4-5-20250929") — more specific than provider.
   modelName: string | null;
+  // Debug prefix for swarm conversations — prepended to first CLI message.
+  // Stays on the object (never cleared) so toJSON() includes it for client rendering.
+  swarmDebugPrefix: string | null;
   // Sub-agent tracking
   subAgents: SubAgent[];
   // Server-owned message queue — persists across client navigation/refresh.
@@ -213,7 +216,9 @@ class Conversation extends EventEmitter {
     /** Optional: parent conversation id for provider-native sub-agent sessions */
     parentConversationId: string | null = null,
     /** Optional: full model name from CLI */
-    modelName: string | null = null
+    modelName: string | null = null,
+    /** Optional: debug prefix for swarm conversations */
+    swarmDebugPrefix: string | null = null
   ) {
     super();
     this.id = id;
@@ -235,6 +240,7 @@ class Conversation extends EventEmitter {
     this.workerRole = workerRole;
     this.parentConversationId = parentConversationId;
     this.modelName = modelName;
+    this.swarmDebugPrefix = swarmDebugPrefix;
     this.providerConfig = getProvider(provider);
     this.subAgents = [];
     this.queue = [];
@@ -652,7 +658,14 @@ class Conversation extends EventEmitter {
       return;
     }
 
-    // Add user message to history
+    // Prepend swarm debug prefix on first message only.
+    // UI sees clean content; CLI process gets the full context.
+    let cliContent = content;
+    if (this.swarmDebugPrefix !== null && this.messages.length === 0) {
+      cliContent = this.swarmDebugPrefix + '\n\n' + content;
+    }
+
+    // Add user message to history (clean content for UI)
     const userMessage: Message = {
       role: 'user',
       content: content,
@@ -660,7 +673,7 @@ class Conversation extends EventEmitter {
     };
     this.messages.push(userMessage);
 
-    // Broadcast user message to clients
+    // Broadcast user message to clients (clean content)
     this.broadcastMessage({
       type: 'message',
       role: 'user',
@@ -668,8 +681,8 @@ class Conversation extends EventEmitter {
       conversationId: this.id,
     });
 
-    // Spawn CLI process to handle this message
-    this.spawnForMessage(content);
+    // Spawn CLI process with possibly-prefixed content
+    this.spawnForMessage(cliContent);
   }
 
   stop(): void {
@@ -829,6 +842,7 @@ class Conversation extends EventEmitter {
       workerRole: this.workerRole,
       parentConversationId: this.parentConversationId,
       modelName: this.modelName,
+      swarmDebugPrefix: this.swarmDebugPrefix,
     };
   }
 }
@@ -843,6 +857,7 @@ interface NewConversationData {
   workingDirectory?: string;
   provider?: ProviderName;
   model?: ModelId; // Provider-specific model identifier (e.g. 'opus', 'gpt-5.3-codex-high')
+  swarmDebugPrefix?: string; // Debug prefix prepended to first CLI message
 }
 
 interface SendMessageData {
@@ -960,6 +975,7 @@ wss.on('connection', (ws: WebSocket) => {
           workingDir = path.normalize(workingDir).replace(/\/+$/, '');
           const provider = data.provider || 'claude'; // Support 'claude', 'codex', or 'opencode'
           const model = data.model; // Provider-specific model (undefined = provider default)
+          const swarmDebugPrefix = data.swarmDebugPrefix ?? null;
 
           // Validate provider
           if (provider !== 'claude' && provider !== 'codex' && provider !== 'opencode') {
@@ -1004,7 +1020,7 @@ wss.on('connection', (ws: WebSocket) => {
             return;
           }
 
-          const conv = new Conversation(id, workingDir, provider, undefined, model);
+          const conv = new Conversation(id, workingDir, provider, undefined, model, false, null, null, null, null, null, swarmDebugPrefix);
           conversations.set(id, conv);
 
           // No need to start - we spawn per message now
@@ -1534,6 +1550,8 @@ function normalizeStatus(rawStatus: unknown): OompaWorkerStatus {
     status === 'no-changes' ||
     status === 'executor-done' ||
     status === 'claimed' ||
+    status === 'sync-failed' ||
+    status === 'merge-failed' ||
     status === 'starting'
   ) {
     return status === 'starting' ? 'starting' : 'running';
@@ -1686,6 +1704,8 @@ function readLatestOompaRuntime(projectRoot: string): OompaRuntimeSnapshot {
   const pidAlive = !swarmStopped && typeof pid === 'number' && isPidAlive(String(pid));
   const fallbackAlive = !swarmStopped && !pidAlive && isOompaProcessAlive(projectRoot);
   const isLive = !swarmStopped && (pidAlive || fallbackAlive);
+  const startedAtMs = Date.parse(String(startedData['started-at'] ?? ''));
+  const liveNoCycleGraceMs = 60_000;
 
   // Build worker snapshots from cycle data
   const swarmId = startedData['swarm-id'] ?? runId;
@@ -1698,7 +1718,11 @@ function readLatestOompaRuntime(projectRoot: string): OompaRuntimeSnapshot {
     if (cycle) {
       status = normalizeStatus(cycle.outcome);
     } else if (isLive) {
-      status = 'starting';
+      // Avoid "eternal starting": once the swarm is live past a short grace period,
+      // workers with no completed cycles yet should be shown as running.
+      const noCycleShouldBeRunning =
+        !Number.isFinite(startedAtMs) || (Date.now() - startedAtMs) > liveNoCycleGraceMs;
+      status = noCycleShouldBeRunning ? 'running' : 'starting';
     } else {
       status = 'done';
     }
@@ -1908,6 +1932,8 @@ async function synthesizeSummary(
       isLive = isPidAlive(String(pid));
     }
   }
+  const startedAtMs = Date.parse(String(run['started-at'] ?? ''));
+  const liveNoCycleGraceMs = 60_000;
 
   const workers = (run.workers ?? []).map((w) => {
     const wid = w.id;
@@ -1929,7 +1955,8 @@ async function synthesizeSummary(
       }
       if (c.outcome === 'merged') merges++;
       else if (c.outcome === 'rejected') rejections++;
-      else if (c.outcome === 'error') errors++;
+      else if (c.outcome === 'error' || c.outcome === 'sync-failed' || c.outcome === 'merge-failed')
+        errors++;
     }
 
     // Derive status from what we actually know — never fabricate
@@ -1937,7 +1964,9 @@ async function synthesizeSummary(
     if (workerCycles.length === 0 && !isLive) {
       status = 'unknown';  // No data and not running — don't pretend we know
     } else if (workerCycles.length === 0 && isLive) {
-      status = 'starting';
+      const noCycleShouldBeRunning =
+        !Number.isFinite(startedAtMs) || (Date.now() - startedAtMs) > liveNoCycleGraceMs;
+      status = noCycleShouldBeRunning ? 'running' : 'starting';
     } else if (latestOutcome === 'done' || latestOutcome === 'executor-done') {
       status = 'completed';
     } else if (latestOutcome === 'error') {

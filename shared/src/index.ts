@@ -281,6 +281,10 @@ export const ConversationSchema = z.object({
   // The actual model name from the CLI (e.g., "claude-sonnet-4-5-20250929").
   // More specific than `provider` which is just "claude", "codex", or "opencode".
   modelName: z.string().nullish(),
+  // Debug prefix for swarm conversations — prepended to first CLI message.
+  // UI sees clean user content; CLI process gets the prefix + content.
+  // Stays on the object so toJSON() includes it for client rendering.
+  swarmDebugPrefix: z.string().nullish(),
 });
 
 export type Conversation = z.infer<typeof ConversationSchema>;
@@ -400,6 +404,7 @@ export const NewConversationMessageSchema = z.object({
   workingDirectory: z.string().optional(),
   provider: ProviderSchema.optional(), // Defaults to 'claude' when not specified
   model: ModelIdSchema.optional(),     // Provider-specific model (undefined = provider default)
+  swarmDebugPrefix: z.string().optional(), // Debug prefix prepended to first CLI message
 });
 
 export type NewConversationMessage = z.infer<typeof NewConversationMessageSchema>;

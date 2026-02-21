@@ -118,7 +118,7 @@ interface ConversationStore {
 
   // Actions
   setActiveConversationId: (id: string | null) => void;
-  createConversation: (workingDirectory: string, provider?: Provider, model?: ModelId) => void;
+  createConversation: (workingDirectory: string, provider?: Provider, model?: ModelId, swarmDebugPrefix?: string) => string;
   deleteConversation: (id: string) => void;
   sendMessage: (conversationId: string, content: string) => void;
   stopConversation: (conversationId: string) => void;
@@ -165,7 +165,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
 
   setActiveConversationId: (id) => set({ activeConversationId: id }),
 
-  createConversation: (workingDirectory, provider = 'claude', model) => {
+  createConversation: (workingDirectory, provider = 'claude', model, swarmDebugPrefix) => {
     const id = crypto.randomUUID();
 
     // Optimistic insert: conversation appears in store immediately (before server round-trip).
@@ -188,6 +188,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
       workerRole: null,
       parentConversationId: null,
       modelName: null,
+      swarmDebugPrefix: swarmDebugPrefix ?? null,
     };
 
     set((state) => {
@@ -206,7 +207,10 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
     });
 
     // Tell server to create the real conversation with this ID
-    get()._send({ type: 'new_conversation', id, workingDirectory, provider, model });
+    // swarmDebugPrefix is included so the server can prepend it to the first CLI message.
+    get()._send({ type: 'new_conversation', id, workingDirectory, provider, model, swarmDebugPrefix });
+
+    return id;
   },
 
   deleteConversation: (id) => {
@@ -389,7 +393,12 @@ This final message was added as an interruption: "${content}"`;
         // if user has already navigated away.
         set((state) => {
           const conversations = new Map(state.conversations);
-          conversations.set(data.conversation.id, data.conversation);
+          const existing = conversations.get(data.conversation.id);
+          conversations.set(data.conversation.id, {
+            ...data.conversation,
+            // Preserve client-only metadata from optimistic stub
+            swarmDebugPrefix: data.conversation.swarmDebugPrefix ?? existing?.swarmDebugPrefix ?? null,
+          });
           return { conversations };
         });
         // Server confirmed — no longer pending

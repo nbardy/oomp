@@ -13,6 +13,7 @@ import { buildUnifiedSubAgents } from '../utils/subAgents';
 import { formatTimeAgo } from '../utils/time';
 import { PromptPalette } from './PromptPalette';
 import { SubAgentPanel } from './SubAgentPanel';
+import { SwarmConvoPrefix } from './SwarmConvoPrefix';
 import { VirtualizedMessageList } from './VirtualizedMessageList';
 import type { MessageGroup } from './VirtualizedMessageList';
 import './Chat.css';
@@ -419,11 +420,21 @@ export function Chat() {
 
   const timeAgo = useTimeAgo(lastMessageTime);
 
-  // Wrap messages into groups for VirtualizedMessageList
+  // Wrap messages into groups for VirtualizedMessageList.
+  // Strip swarm debug prefix from first user message display —
+  // the prefix was prepended server-side for the CLI but should not
+  // appear in the chat UI. The SwarmConvoPrefix token shows it instead.
   const messageGroups = useMemo((): MessageGroup[] => {
     if (!conversation) return [];
-    return conversation.messages.map((msg) => ({ type: 'single' as const, messages: [msg] }));
-  }, [conversation?.messages]);
+    const prefix = conversation.swarmDebugPrefix;
+    return conversation.messages.map((msg, i) => {
+      if (i === 0 && msg.role === 'user' && prefix && msg.content.startsWith(prefix)) {
+        const stripped = msg.content.slice(prefix.length).replace(/^\n\n/, '');
+        return { type: 'single' as const, messages: [{ ...msg, content: stripped }] };
+      }
+      return { type: 'single' as const, messages: [msg] };
+    });
+  }, [conversation?.messages, conversation?.swarmDebugPrefix]);
 
   const unifiedSubAgents = useMemo(() => {
     if (!conversation) return [];
@@ -668,6 +679,12 @@ export function Chat() {
         </div>
       ) : (
         <div className="messages-container-wrapper">
+          {conversation.swarmDebugPrefix && (
+            <SwarmConvoPrefix
+              prefix={conversation.swarmDebugPrefix}
+              swarmId={conversation.swarmId ?? null}
+            />
+          )}
           <VirtualizedMessageList
             messageGroups={messageGroups}
             isRunning={isStreaming}

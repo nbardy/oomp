@@ -87,6 +87,82 @@ function extractVerdict(conv: Conversation): 'approved' | 'needs-changes' | 'rej
   return conv.isRunning ? 'pending' : 'pending';
 }
 
+/** Build the invisible system-prefix for a swarm debug conversation.
+ * This is prepended to the first CLI message so the agent has swarm context,
+ * but stripped from the chat UI (SwarmConvoPrefix renders it as a token). */
+function buildSwarmDebugPrefix(
+  projectRoot: string,
+  configPath: string | null,
+  swarmId: string | null,
+  summary: SwarmRunSummary | null,
+  startedAt: string | null,
+): string {
+  const configDisplay = configPath ?? `${projectRoot}/oompa.json`;
+  const swarmDisplay = swarmId ?? 'unknown';
+  const runsDir = `${projectRoot}/runs/${swarmDisplay}`;
+
+  const lines: string[] = [
+    'You are debugging an oompa swarm run. Here is the full context:',
+    '',
+    '## Swarm Context',
+    `- Project: ${projectRoot}`,
+    `- Config: ${configDisplay}`,
+    `- Swarm ID: ${swarmDisplay}`,
+  ];
+
+  if (startedAt) {
+    lines.push(`- Started: ${new Date(startedAt).toLocaleString()}`);
+  }
+
+  if (summary) {
+    const totalMerges = summary.workers.reduce((s, w) => s + w.merges, 0);
+    const totalRej = summary.workers.reduce((s, w) => s + w.rejections, 0);
+    const totalErr = summary.workers.reduce((s, w) => s + w.errors, 0);
+
+    lines.push(
+      '',
+      '## Run Summary',
+      `- Completed: ${summary['total-completed']}`,
+      `- Total Iterations: ${summary['total-iterations']}`,
+      `- Merges: ${totalMerges}`,
+      `- Rejections: ${totalRej}`,
+      `- Errors: ${totalErr}`,
+    );
+
+    if (summary.workers.length > 0) {
+      lines.push(
+        '',
+        '## Worker Status',
+        'Worker | Harness | Status | Done | Merges | Rej | Err | Reviews',
+        '-------|---------|--------|------|--------|-----|-----|--------',
+      );
+      for (const w of summary.workers) {
+        lines.push(
+          `${w.id} | ${w.harness}:${w.model ?? 'default'} | ${w.status} | ${w.completed}/${w.iterations} | ${w.merges} | ${w.rejections} | ${w.errors} | ${w['review-rounds-total']}`,
+        );
+      }
+    }
+  }
+
+  lines.push(
+    '',
+    '## Agent Output Visibility',
+    `Oompa run files are saved to: ${runsDir}/`,
+    'Key files:',
+    '- started.json — swarm config, worker definitions, planner/reviewer setup',
+    '- cycles/<worker>-c<N>.json — per-cycle outcomes (merged/rejected/error/done)',
+    '- reviews/<worker>-c<N>-r<round>.json — reviewer verdicts with full output',
+    '- stopped.json — final exit status and reason',
+    '',
+    `To list run artifacts: ls ${runsDir}/`,
+    `To read a review: cat ${runsDir}/reviews/<file>.json`,
+    '',
+    'Given this context, help the user debug and investigate the swarm run.',
+  );
+
+  return lines.join('\n');
+}
+
 type SwarmTab = 'workers' | 'runs';
 
 // =============================================================================
@@ -516,7 +592,39 @@ export function SwarmDetail() {
   }, []);
 
   // Tab state
-  const [activeTab, setActiveTab] = useState<SwarmTab>('workers');
+  const [activeTab, setActiveTab] = useState<SwarmTab>('runs');
+
+  // Swarm debug conversation: create a new Claude conversation pre-seeded with swarm context
+  const createConversation = useConversationStore((s) => s.createConversation);
+
+  const handleStartDebugConversation = useCallback(async () => {
+    const swarmId = runtimeSnapshot?.run?.swarmId ?? null;
+    const configPath = runtimeSnapshot?.run?.configPath ?? null;
+
+    // Fetch the latest run summary for the prefix context.
+    let summary: SwarmRunSummary | null = null;
+    let startedAt: string | null = null;
+    try {
+      const res = await fetch(`/api/swarm-runs?dir=${encodeURIComponent(projectRoot)}`);
+      if (res.ok) {
+        const data: { runs: SwarmRun[] } = await res.json();
+        // Find matching run by swarmId, or use the most recent
+        const match = swarmId
+          ? data.runs.find((r) => r.swarmId === swarmId)
+          : data.runs[0];
+        if (match) {
+          summary = match.summary;
+          startedAt = match.run?.['started-at'] ?? null;
+        }
+      }
+    } catch {
+      // Non-critical — prefix still works without summary data
+    }
+
+    const prefix = buildSwarmDebugPrefix(projectRoot, configPath, swarmId, summary, startedAt);
+    const id = createConversation(projectRoot, 'claude', undefined, prefix);
+    navigate(`/chat/${id}`);
+  }, [projectRoot, runtimeSnapshot, createConversation, navigate]);
 
   // Filter workers belonging to this project, build exec groups with paired reviews/fixes.
   // Reviews/fixes are matched to exec workers by time proximity within the same swarmId.
@@ -660,6 +768,13 @@ export function SwarmDetail() {
         <h2>{projectName}</h2>
         <span className="swarm-detail-path">{displayPath}</span>
         <div className="swarm-detail-header-stats">
+          <button
+            className="swarm-debug-btn"
+            onClick={handleStartDebugConversation}
+            title="Start a debug conversation about this swarm"
+          >
+            Debug Conversation
+          </button>
           <div className={`state-badge state-${displayRunning > 0 ? 'running' : 'idle'}`}>
             <div className="state-indicator" />
             <span className="state-label">

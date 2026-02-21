@@ -815,3 +815,24 @@
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* =============================================================================
+   Debug Conversation Button — opens a Claude chat pre-seeded with swarm context
+   ============================================================================= */
+
+.swarm-debug-btn {
+  padding: 3px 10px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid var(--violet);
+  background: var(--bg-card);
+  color: var(--violet);
+  transition: background 0.15s, box-shadow 0.15s;
+}
+
+.swarm-debug-btn:hover {
+  background: var(--violet-dim);
+  box-shadow: 0 0 0 1px var(--violet-glow);
+}

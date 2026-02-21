@@ -1,0 +1,288 @@
+/* =============================================================================
+   SwarmConvoPrefix.css — Collapsible context card shown at top of debug
+   conversations. Collapsed: compact token with stat chips. Expanded: full
+   summary card with stats grid, worker table, and raw prefix.
+   ============================================================================= */
+
+.swarm-convo-prefix {
+  margin: 8px 24px 0;
+}
+
+/* ---------- Collapsed token button ---------- */
+
+.swarm-prefix-token {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border: 1px solid var(--violet-dim);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--violet) 8%, var(--bg-card));
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  width: 100%;
+  text-align: left;
+}
+
+.swarm-prefix-token:hover {
+  background: color-mix(in srgb, var(--violet) 14%, var(--bg-card));
+  border-color: var(--violet);
+}
+
+.swarm-prefix-token.expanded {
+  border-radius: 6px 6px 0 0;
+  border-bottom-color: transparent;
+}
+
+.swarm-prefix-indicator {
+  font-size: 10px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  width: 10px;
+}
+
+.swarm-prefix-label {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--violet);
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--violet) 15%, transparent);
+  flex-shrink: 0;
+}
+
+.swarm-prefix-id {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: var(--text-emphasis);
+  font-weight: 600;
+}
+
+.swarm-prefix-stats {
+  display: inline-flex;
+  gap: 6px;
+  margin-left: 4px;
+}
+
+.swarm-stat-chip {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+
+.swarm-stat-chip.chip-neutral {
+  background: color-mix(in srgb, var(--cyan) 12%, transparent);
+  color: var(--cyan);
+}
+
+.swarm-stat-chip.chip-success {
+  background: color-mix(in srgb, var(--green) 15%, transparent);
+  color: var(--green-bright);
+}
+
+.swarm-stat-chip.chip-warning {
+  background: color-mix(in srgb, var(--orange) 15%, transparent);
+  color: var(--orange);
+}
+
+.swarm-stat-chip.chip-error {
+  background: color-mix(in srgb, var(--red) 15%, transparent);
+  color: var(--red);
+}
+
+.swarm-prefix-time {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+/* ---------- Expanded content card ---------- */
+
+.swarm-prefix-content {
+  border: 1px solid var(--violet-dim);
+  border-top: none;
+  border-radius: 0 0 6px 6px;
+  background: var(--bg-card);
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Key-value summary rows */
+.swarm-prefix-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.swarm-prefix-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.swarm-prefix-key {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  min-width: 80px;
+  flex-shrink: 0;
+}
+
+.swarm-prefix-val {
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+code.swarm-prefix-val {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: var(--cyan);
+}
+
+/* Stats grid */
+.swarm-prefix-stat-grid {
+  display: flex;
+  gap: 16px;
+  padding: 10px 12px;
+  background: var(--bg-elevated);
+  border-radius: 6px;
+}
+
+.swarm-prefix-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 56px;
+}
+
+.swarm-prefix-stat-value {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.swarm-prefix-stat-value.stat-success {
+  color: var(--green-bright);
+}
+
+.swarm-prefix-stat-value.stat-warning {
+  color: var(--orange);
+}
+
+.swarm-prefix-stat-value.stat-error {
+  color: var(--red);
+}
+
+.swarm-prefix-stat-label {
+  font-size: 9px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+/* Worker table */
+.swarm-prefix-workers {
+  overflow-x: auto;
+}
+
+.swarm-prefix-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.swarm-prefix-table th {
+  text-align: left;
+  padding: 5px 8px;
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.swarm-prefix-table td {
+  padding: 4px 8px;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.swarm-prefix-table .worker-id-cell {
+  font-family: var(--font-mono, monospace);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.swarm-prefix-status {
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.swarm-prefix-status.status-completed,
+.swarm-prefix-status.status-done {
+  background: color-mix(in srgb, var(--green) 15%, transparent);
+  color: var(--green-bright);
+}
+
+.swarm-prefix-status.status-running {
+  background: color-mix(in srgb, var(--cyan) 15%, transparent);
+  color: var(--cyan);
+}
+
+.swarm-prefix-status.status-error {
+  background: color-mix(in srgb, var(--red) 15%, transparent);
+  color: var(--red);
+}
+
+.swarm-prefix-status.status-exhausted {
+  background: color-mix(in srgb, var(--yellow) 15%, transparent);
+  color: var(--yellow-bright);
+}
+
+/* Raw prefix collapsible */
+.swarm-prefix-raw {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 8px;
+}
+
+.swarm-prefix-raw summary {
+  font-size: 10px;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+  font-weight: 500;
+}
+
+.swarm-prefix-raw summary:hover {
+  color: var(--text-secondary);
+}
+
+.swarm-prefix-text {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  background: var(--bg-base);
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: var(--font-mono, monospace);
+  line-height: 1.5;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 300px;
+  overflow-y: auto;
+}
