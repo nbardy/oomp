@@ -12,7 +12,7 @@ import { PathAutocomplete } from './PathAutocomplete';
 import { SearchPalette } from './SearchPalette';
 import './Sidebar.css';
 
-const RECENT_CUTOFF_MS = 48 * 60 * 60 * 1000;
+const RECENT_CUTOFF_MS = 7 * 24 * 60 * 60 * 1000;
 
 interface FolderGroup {
   directory: string;
