@@ -31,6 +31,8 @@ import { isModelIdValidForProvider, modelValidationHint } from './providers/mode
 
 import multer from 'multer';
 
+const VERBOSE = process.env.VERBOSE === '1' || process.argv.includes('--verbose');
+
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
@@ -322,7 +324,7 @@ class Conversation extends EventEmitter {
           const json = JSON.parse(trimmed) as unknown;
           const jsonType = (json as { type?: string }).type;
           const eventType = (json as { event?: { type?: string } }).event?.type;
-          console.log(
+          if (VERBOSE) console.log(
             `[${this.id}] RAW: type=${jsonType}${eventType ? `, event.type=${eventType}` : ''}`
           );
 
@@ -404,12 +406,15 @@ class Conversation extends EventEmitter {
 
       // Non-zero exit = crash. Notify the client so the user sees why
       // the response stopped mid-sentence instead of silently ending.
+      // Push to this.messages so the poller preserves it (see trailing system
+      // messages merge in startFilePolling).
       if (code !== null && code !== 0) {
         const details = stderrSnippet(this._stderrBuffer);
         const errorMsg = details
           ? `Process exited with code ${code}: ${details}`
           : `Process exited with code ${code}`;
         console.error(`[${this.id}] ${errorMsg}`);
+        this.messages.push({ role: 'system', content: errorMsg, timestamp: new Date() });
         broadcastToAll({
           type: 'message',
           conversationId: this.id,
@@ -424,11 +429,13 @@ class Conversation extends EventEmitter {
       if (code === 0 && !this._sawStdoutEventThisRun) {
         const details = stderrSnippet(this._stderrBuffer);
         if (details) {
+          const content = `Provider reported an error without response output: ${details}`;
+          this.messages.push({ role: 'system', content, timestamp: new Date() });
           broadcastToAll({
             type: 'message',
             conversationId: this.id,
             role: 'system',
-            content: `Provider reported an error without response output: ${details}`,
+            content,
           });
         }
       }
@@ -512,7 +519,7 @@ class Conversation extends EventEmitter {
           currentMsg.content += event.text;
         }
         // Now send the text chunk - client will append to the assistant message
-        console.log(
+        if (VERBOSE) console.log(
           `[${this.id}] chunk (${event.text.length} chars): "${event.text.substring(0, 30).replace(/\n/g, '\\n')}..."`
         );
         this.broadcastChunk({
@@ -640,8 +647,24 @@ class Conversation extends EventEmitter {
         break;
       }
 
-      case 'error':
-        throw new Error(`Provider error: ${event.message}`);
+      case 'error': {
+        // Surface provider errors (usage limits, auth failures, turn errors)
+        // to the client as a system message so the user sees what happened.
+        console.error(`[${this.id}] Provider error: ${event.message}`);
+        const errorMessage: Message = {
+          role: 'system',
+          content: event.message,
+          timestamp: new Date(),
+        };
+        this.messages.push(errorMessage);
+        broadcastToAll({
+          type: 'message',
+          conversationId: this.id,
+          role: 'system',
+          content: event.message,
+        });
+        break;
+      }
 
       default:
         // TypeScript exhaustive check - this should never happen
@@ -3448,8 +3471,16 @@ function startFilePolling(): void {
         }
 
         if (existing && !existing.isRunning) {
-          // Update existing conversation in-place (preserve process handles, provider config)
-          existing.messages = convData.messages;
+          // Update existing conversation in-place (preserve process handles, provider config).
+          // Preserve server-injected system messages (error reports, exit info) that
+          // exist only in memory — disk files don't contain these. Without this,
+          // the poller would nuke error messages like "usage limit" within one poll cycle.
+          const trailingSystemMessages = existing.messages.filter(
+            (m, i) => m.role === 'system' && i >= convData.messages.length
+          );
+          existing.messages = trailingSystemMessages.length > 0
+            ? [...convData.messages, ...trailingSystemMessages]
+            : convData.messages;
           existing.subAgents = convData.subAgents;
           existing.createdAt = convData.createdAt;
           existing.isWorker = convData.isWorker;

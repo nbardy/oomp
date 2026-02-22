@@ -17,7 +17,8 @@
  * - {"type":"thread.started","thread_id":"..."} - Session created, thread_id for resume
  * - {"type":"turn.started"} - Model turn beginning
  * - {"type":"turn.completed","usage":{...}} - Turn done
- * - {"type":"turn.failed","error":"..."} - Turn errored
+ * - {"type":"turn.failed","error":...} - Turn errored (error can be string or object)
+ * - {"type":"error","message":"..."} - Account-level error (usage limits, auth failures)
  * - {"type":"item.started","item":{...}} - Item beginning (command, mcp_tool_call, etc.)
  * - {"type":"item.completed","item":{...}} - Item finished
  * - {"type":"item.updated","item":{...}} - Item mid-flight update (streaming)
@@ -32,6 +33,8 @@
  * - plan_update — Agent planning → hidden (message_start)
  *
  * Any unknown TOP-LEVEL type throws ProviderParseError.
+ * The 'error' top-level type (usage limits, auth failures) returns a ProviderEvent
+ * error so it surfaces to the user in the web UI.
  * Unknown ITEM types log a warning and return message_start (Codex adds new item
  * types frequently and crashing on them is worse than ignoring them).
  */
@@ -116,11 +119,15 @@ interface CodexTurnCompleted {
 }
 
 // The top-level type discriminant
+// NOTE: 'error' is emitted by Codex CLI for account-level failures (usage limits,
+// auth errors) BEFORE or instead of turn.failed. It's distinct from turn.failed
+// which covers model-level turn errors.
 type CodexTopLevelType =
   | 'thread.started'
   | 'turn.started'
   | 'turn.completed'
   | 'turn.failed'
+  | 'error'
   | 'item.started'
   | 'item.completed'
   | 'item.updated';
@@ -134,6 +141,7 @@ function isCodexOutput(data: unknown): data is { type: CodexTopLevelType } {
     obj.type === 'turn.started' ||
     obj.type === 'turn.completed' ||
     obj.type === 'turn.failed' ||
+    obj.type === 'error' ||
     obj.type === 'item.started' ||
     obj.type === 'item.completed' ||
     obj.type === 'item.updated'
@@ -449,9 +457,23 @@ const codexProvider: Provider = {
         return { type: 'message_complete' };
 
       case 'turn.failed': {
-        // Turn errored — surface to user
-        const errMsg = (json as { error?: string }).error ?? 'Unknown error';
+        // Turn errored — surface to user.
+        // The error field can be a string or an object (e.g. {message: "..."}).
+        const rawErr = (json as { error?: unknown }).error;
+        const errMsg = typeof rawErr === 'string'
+          ? rawErr
+          : typeof rawErr === 'object' && rawErr !== null && 'message' in rawErr
+            ? String((rawErr as { message: unknown }).message)
+            : JSON.stringify(rawErr) ?? 'Unknown error';
         return { type: 'error', message: `Codex turn failed: ${errMsg}` };
+      }
+
+      case 'error': {
+        // Account-level errors (usage limits, auth failures).
+        // Emitted as a standalone top-level event, often before turn.failed.
+        const msg = (json as { message?: unknown }).message;
+        const errorText = typeof msg === 'string' ? msg : JSON.stringify(json);
+        return { type: 'error', message: errorText };
       }
 
       case 'item.updated':
