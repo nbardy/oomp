@@ -1,12 +1,12 @@
-# Chocolate Factory
+# oomp
 
 A hackable client for agentic programming.
 
-Auto-reloads and lets you edit your own programming environment with agents as you code. Wishing your agent tool had a feature you need? Just open a conversation on `~/git/chocolate-factory` and ask for it.
+Auto-reloads and lets you edit your own programming environment with agents as you code. Wishing your agent tool had a feature you need? Just open a conversation on `~/git/oomp` and ask for it.
 
-Just like Vim and Emacs ruled the old engineering flow with their open-source extension ecosystems, Chocolate Factory provides that same hackable baseline for the agent era.
+Just like Vim and Emacs ruled the old engineering flow with their open-source extension ecosystems, oomp provides that same hackable baseline for the agent era.
 
-![Chocolate Factory](docs/screenshots/gallery.png)
+![oomp](docs/screenshots/gallery.png)
 
 ## What it does
 
