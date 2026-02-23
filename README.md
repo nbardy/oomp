@@ -1,44 +1,52 @@
-# Claude Multi-Chat
+# Chocolate Factory
 
-A simple web interface for managing multiple Claude CLI conversations simultaneously.
+A web dashboard for your CLI coding agents. Reads conversations from Claude Code, Codex, OpenCode, and Gemini CLI — all in one place.
 
-## Features
+![Chocolate Factory](docs/screenshots/gallery.png)
 
-- Create multiple concurrent Claude conversations
-- Switch between gallery view (all conversations) and chat view (single conversation)
-- Real-time streaming responses from Claude
-- Visual status indicators for running processes
-- Delete conversations when done
+### Swarm Analytics
 
-## Setup
+Track multi-agent swarm runs — iterations, merges, rejections, per-worker timelines.
 
-1. Install dependencies:
+![Swarm Analytics](docs/screenshots/swarm-analytics.png)
+
+## Quick Start
+
+**Prerequisites:** [pnpm](https://pnpm.io/) and at least one supported CLI agent installed and authenticated (e.g. `claude`).
+
 ```bash
-npm install
+pnpm install
+pnpm dev
 ```
 
-2. Make sure you have `claude` CLI installed and authenticated
+Opens at [http://localhost:5173](http://localhost:5173) (client) with the API server on port 3000.
 
-3. Start the server:
+### Production
+
 ```bash
-npm start
+pnpm build
+pnpm start     # serves built client + API on port 3000
 ```
 
-4. Open http://localhost:3000 in your browser
+## Supported Agents
 
-## Usage
+| Agent | Disk path read | Live spawn |
+|-------|---------------|------------|
+| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | `~/.claude/projects/` | Yes |
+| [Codex](https://github.com/openai/codex) | `~/.codex/sessions/` | Yes |
+| [OpenCode](https://github.com/opencode-ai/opencode) | `~/.local/share/opencode/` | No (read-only) |
+| [Gemini CLI](https://github.com/google-gemini/gemini-cli) | `~/.gemini/tmp/` | Yes |
 
-- Click "+ New Conversation" to start a new Claude session
-- Click on any conversation card in the gallery to open it
-- Switch between "Gallery" and "Chat" views using the top buttons
-- Send messages in the chat view
-- Green indicator = Claude process is running
-- Gray indicator = Process stopped
-- Delete conversations using the delete button (appears on hover in sidebar)
+The server auto-discovers conversations from each agent's disk format. No configuration needed — if the CLI has been used, its sessions show up.
 
-## How it works
+## Project Structure
 
-- Each conversation spawns a separate `claude` process with JSON streaming I/O
-- The backend manages multiple Claude processes and routes messages via WebSocket
-- The frontend is a single-page app that displays conversations in grid or chat view
-- Messages are streamed in real-time from Claude to the UI
+```
+client/     React + Vite frontend
+server/     Express + WebSocket backend
+shared/     Shared types (Zod schemas)
+```
+
+## License
+
+MIT

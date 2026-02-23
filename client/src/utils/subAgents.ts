@@ -27,7 +27,7 @@ function lastMessageSummary(messages: Conversation['messages']): string | undefi
 function projectChildConversationToSubAgent(child: Conversation): SubAgent {
   const startedAt = new Date(child.createdAt);
   const completedAt = child.isRunning ? undefined : (getLastMessageTime(child.messages) ?? startedAt);
-  const roleLabel = child.provider === 'codex' ? 'Codex' : child.provider === 'opencode' ? 'OpenCode' : 'Claude';
+  const roleLabel = child.provider === 'codex' ? 'Codex' : child.provider === 'opencode' ? 'OpenCode' : child.provider === 'gemini' ? 'Gemini' : 'Claude';
   const description = firstUserSummary(child.messages) ?? `${roleLabel} spawned session`;
 
   return {

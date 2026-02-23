@@ -15,7 +15,7 @@ interface DailyUsage {
 
 interface SessionUsage {
   sessionId: string;
-  provider: 'claude' | 'codex' | 'opencode';
+  provider: 'claude' | 'codex' | 'opencode' | 'gemini';
   model: string;
   inputTokens: number;
   outputTokens: number;
@@ -45,7 +45,7 @@ interface UsageData {
   };
 }
 
-type ProviderTab = 'all' | 'claude' | 'codex' | 'opencode';
+type ProviderTab = 'all' | 'claude' | 'codex' | 'opencode' | 'gemini';
 
 function formatCost(usd: number): string {
   if (usd === 0) return '$0.00';
@@ -177,14 +177,14 @@ export function UsagePanel({ onClose }: Props) {
             <>
               {/* Provider toggle */}
               <div className="usage-tab-row">
-                {(['all', 'claude', 'codex', 'opencode'] as ProviderTab[]).map((t) => (
+                {(['all', 'claude', 'codex', 'opencode', 'gemini'] as ProviderTab[]).map((t) => (
                   <button
                     key={t}
                     type="button"
                     className={`usage-tab ${tab === t ? 'active' : ''}`}
                     onClick={() => setTab(t)}
                   >
-                    {t === 'all' ? 'All' : t === 'claude' ? 'Claude' : t === 'codex' ? 'Codex' : 'OpenCode'}
+                    {t === 'all' ? 'All' : t === 'claude' ? 'Claude' : t === 'codex' ? 'Codex' : t === 'opencode' ? 'OpenCode' : 'Gemini'}
                   </button>
                 ))}
               </div>
@@ -273,7 +273,7 @@ export function UsagePanel({ onClose }: Props) {
                     {filteredSessions.slice(0, 10).map((s) => (
                       <div key={s.sessionId} className="usage-daily-row">
                         <span className="usage-session-provider">
-                          {s.provider === 'claude' ? 'C' : s.provider === 'codex' ? 'X' : 'O'}
+                          {s.provider === 'claude' ? 'C' : s.provider === 'codex' ? 'X' : s.provider === 'gemini' ? 'G' : 'O'}
                         </span>
                         <span className="usage-session-id">{s.sessionId.slice(0, 8)}</span>
                         <span className="usage-daily-date">{s.date.slice(5)}</span>

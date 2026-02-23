@@ -253,6 +253,10 @@
   background: color-mix(in srgb, var(--green) 20%, transparent);
   color: var(--green);
 }
+.worker-pane-provider.provider-gemini {
+  background: color-mix(in srgb, var(--green) 20%, transparent);
+  color: var(--blue-bright);
+}
 
 .worker-pane-messages {
   flex: 1;

@@ -4,10 +4,11 @@
  * Reads persisted session files and converts them to our Conversation type.
  *
  * Supported sources:
- * - Claude: ~/.claude/projects/{encoded-path}/*.jsonl
- * - Codex:  ~/.codex/sessions/YYYY/MM/DD/*.jsonl
+ * - Claude:   ~/.claude/projects/{encoded-path}/*.jsonl
+ * - Codex:    ~/.codex/sessions/YYYY/MM/DD/*.jsonl
  * - OpenCode: ~/.local/share/opencode/storage/message/{session-id}/*.json
  *             + ~/.local/share/opencode/storage/part/{message-id}/*.json
+ * - Gemini:   ~/.gemini/tmp/{project}/chats/session-*.json
  */
 
 import * as fs from 'fs';
@@ -49,16 +50,19 @@ function normalizeDirPath(dir: string): string {
 // =============================================================================
 
 /** Default location of Claude Code projects directory */
-const CLAUDE_PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
+export const CLAUDE_PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
 
 /** Default location of Codex native sessions directory */
-const CODEX_SESSIONS_DIR = path.join(os.homedir(), '.codex', 'sessions');
+export const CODEX_SESSIONS_DIR = path.join(os.homedir(), '.codex', 'sessions');
 
 /** Default location of OpenCode storage directories */
 const OPENCODE_STORAGE_DIR = path.join(os.homedir(), '.local', 'share', 'opencode', 'storage');
-const OPENCODE_MESSAGE_DIR = path.join(OPENCODE_STORAGE_DIR, 'message');
-const OPENCODE_PART_DIR = path.join(OPENCODE_STORAGE_DIR, 'part');
+export const OPENCODE_MESSAGE_DIR = path.join(OPENCODE_STORAGE_DIR, 'message');
+export const OPENCODE_PART_DIR = path.join(OPENCODE_STORAGE_DIR, 'part');
 const OPENCODE_SESSION_DIR = path.join(OPENCODE_STORAGE_DIR, 'session');
+
+/** Default location of Gemini CLI session files */
+export const GEMINI_SESSIONS_DIR = path.join(os.homedir(), '.gemini', 'tmp');
 
 /** Track directories that have already warned about ENOENT (only log once) */
 const warnedDirectories = new Set<string>();
@@ -153,7 +157,7 @@ export async function getOpenCodeSessionDirectories(
  * Build a lookup of OpenCode session ID -> metadata JSON path.
  * Metadata is stored in ~/.local/share/opencode/storage/session/{project-id}/{session-id}.json
  */
-async function getOpenCodeSessionMetadataIndex(
+export async function getOpenCodeSessionMetadataIndex(
   sessionDir: string = OPENCODE_SESSION_DIR
 ): Promise<Map<string, string>> {
   const index = new Map<string, string>();
@@ -267,7 +271,7 @@ export async function parseJsonlFile(filePath: string): Promise<JsonlSession> {
   };
 }
 
-interface CodexSession {
+export interface CodexSession {
   sessionId: string;
   filePath: string;
   workingDirectory: string;
@@ -278,7 +282,7 @@ interface CodexSession {
   entries: CodexSessionEntry[];
 }
 
-interface OpenCodeSession {
+export interface OpenCodeSession {
   sessionId: string;
   filePath: string; // session directory path
   workingDirectory: string;
@@ -300,7 +304,7 @@ interface OpenCodeParsedPart {
 
 const CODEX_SESSION_ID_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 
-function extractCodexSessionIdFromFilename(filePath: string): string | null {
+export function extractCodexSessionIdFromFilename(filePath: string): string | null {
   const stem = path.basename(filePath, '.jsonl');
   const match = stem.match(CODEX_SESSION_ID_RE);
   return match ? match[1] : null;
@@ -309,7 +313,7 @@ function extractCodexSessionIdFromFilename(filePath: string): string | null {
 /**
  * Parse a native Codex session file (~/.codex/sessions/YYYY/MM/DD/*.jsonl).
  */
-async function parseCodexJsonlFile(filePath: string): Promise<CodexSession> {
+export async function parseCodexJsonlFile(filePath: string): Promise<CodexSession> {
   const entries: CodexSessionEntry[] = [];
   let sessionId = '';
   let workingDirectory = '';
@@ -548,7 +552,7 @@ async function parseOpenCodePartFiles(
  * Compute an OpenCode session mtime from message files, part directories, and
  * optional session metadata. Used for startup discovery + polling.
  */
-async function getOpenCodeSessionMtime(
+export async function getOpenCodeSessionMtime(
   sessionDirPath: string,
   openCodePartDir: string,
   metadataPath?: string
@@ -599,7 +603,7 @@ async function getOpenCodeSessionMtime(
  * - part/{messageId}/*.json for user/assistant content parts
  * - session/<project-id>/{sessionId}.json for cwd + time metadata (best-effort)
  */
-async function parseOpenCodeSessionDirectory(
+export async function parseOpenCodeSessionDirectory(
   sessionDirPath: string,
   openCodePartDir: string = OPENCODE_PART_DIR,
   sessionMetadataIndex: Map<string, string> = new Map()
@@ -867,7 +871,7 @@ function extractCodexContentText(content: unknown): string {
  * system/developer bootstrap prompts from response_item entries.
  * Fallback: response_item payload.message entries for older traces.
  */
-function extractMessagesFromCodexEntries(entries: CodexSessionEntry[]): Message[] {
+export function extractMessagesFromCodexEntries(entries: CodexSessionEntry[]): Message[] {
   const messages: Message[] = [];
 
   const hasEventMessages = entries.some((entry) =>
@@ -1012,6 +1016,9 @@ export function extractSubAgentsFromEntries(entries: JsonlEntry[]): SubAgent[] {
  */
 export function inferProviderFromModel(model: string): Provider {
   const lower = model.toLowerCase();
+  if (lower.includes('gemini')) {
+    return 'gemini';
+  }
   if (
     lower.includes('opencode') ||
     lower.includes('kimi-k2') ||
@@ -1063,7 +1070,7 @@ function inferWorkerRole(content: string): 'work' | 'review' | 'fix' {
   return 'work';
 }
 
-interface WorkerMetadata {
+export interface WorkerMetadata {
   isHidden: boolean;
   isWorker: boolean;
   swarmId: string | null;
@@ -1071,7 +1078,7 @@ interface WorkerMetadata {
   workerRole: 'work' | 'review' | 'fix' | null;
 }
 
-function extractWorkerMetadata(messages: Message[]): WorkerMetadata {
+export function extractWorkerMetadata(messages: Message[]): WorkerMetadata {
   const metadata: WorkerMetadata = {
     isHidden: false,
     isWorker: false,
@@ -1109,534 +1116,154 @@ function extractWorkerMetadata(messages: Message[]): WorkerMetadata {
   return metadata;
 }
 
-/**
- * Convert a parsed JSONL session to our Conversation type.
- * Returns null for [_HIDE_TEST_] conversations (test/probe runs dropped at ingestion).
- * Detects oompa workers by checking for "[oompa...]" tag in the first user message.
- */
-export function jsonlSessionToConversation(session: JsonlSession): Conversation | null {
-  const messages = extractMessagesFromEntries(session.entries);
-  const worker = extractWorkerMetadata(messages);
-  if (worker.isHidden) return null;
-
-  return {
-    id: session.sessionId,
-    messages,
-    isRunning: false,
-    isStreaming: false, // Loaded from disk — process is dead
-    confirmed: true,
-    createdAt: session.createdAt,
-    workingDirectory: session.workingDirectory,
-    provider: inferProviderFromModel(session.model),
-    subAgents: extractSubAgentsFromEntries(session.entries),
-    queue: [],
-    isWorker: worker.isWorker,
-    swarmId: worker.swarmId,
-    workerId: worker.workerId,
-    workerRole: worker.workerRole,
-    parentConversationId: null,
-    modelName: session.model !== 'unknown' ? session.model : null,
-  };
-}
-
-function codexSessionToConversation(session: CodexSession): Conversation | null {
-  const messages = extractMessagesFromCodexEntries(session.entries);
-  const worker = extractWorkerMetadata(messages);
-  if (worker.isHidden) return null;
-
-  return {
-    id: session.sessionId,
-    messages,
-    isRunning: false,
-    isStreaming: false, // Loaded from disk — process is dead
-    confirmed: true,
-    createdAt: session.createdAt,
-    workingDirectory: session.workingDirectory,
-    provider: 'codex',
-    subAgents: [],
-    queue: [],
-    isWorker: worker.isWorker,
-    swarmId: worker.swarmId,
-    workerId: worker.workerId,
-    workerRole: worker.workerRole,
-    parentConversationId: session.parentSessionId ?? null,
-    modelName: session.model !== 'unknown' ? session.model : null,
-  };
-}
-
-function openCodeSessionToConversation(session: OpenCodeSession): Conversation | null {
-  const messages = [...session.messages];
-  const worker = extractWorkerMetadata(messages);
-  if (worker.isHidden) return null;
-
-  return {
-    id: session.sessionId,
-    messages,
-    isRunning: false,
-    isStreaming: false, // Loaded from disk — process is dead
-    confirmed: true,
-    createdAt: session.createdAt,
-    workingDirectory: session.workingDirectory,
-    provider: 'opencode',
-    subAgents: [],
-    queue: [],
-    isWorker: worker.isWorker,
-    swarmId: worker.swarmId,
-    workerId: worker.workerId,
-    workerRole: worker.workerRole,
-    parentConversationId: null,
-    modelName: session.model !== 'unknown' ? session.model : null,
-  };
-}
+// jsonlSessionToConversation, codexSessionToConversation, openCodeSessionToConversation,
+// and geminiSessionToConversation have been removed.
+// They are replaced by the single sessionToConversation() function in disk-adapter.ts,
+// which operates on the normalized ParsedSession type produced by each DiskAdapter.
+// See server/src/adapters/registry.ts for the per-provider adapters.
 
 // =============================================================================
-// Main Loading Function
+// Gemini Session Reading
+//
+// Gemini CLI persists sessions to ~/.gemini/tmp/{project}/chats/session-*.json
+// Each file is a JSON object with sessionId, startTime, lastUpdated, messages[].
+// Messages have type: "user" (content is [{text}]) or "gemini" (content is string).
 // =============================================================================
 
-/**
- * Result of loading conversations, includes mtime index for subsequent polling.
- */
-export interface LoadResult {
-  conversations: Map<string, Conversation>;
-  mtimes: Map<string, number>; // filepath → mtime ms
-}
-
-/**
- * Result of polling for changes since last check.
- */
-export interface PollResult {
-  updated: Map<string, Conversation>; // changed or new conversations
-  mtimes: Map<string, number>;        // full updated mtime index
-}
-
-// =============================================================================
-// Parallel Processing Helper
-// =============================================================================
-
-/**
- * Process items with bounded concurrency (worker-pool pattern).
- * No external dependencies — just Promise-based throttling.
- *
- * @param items - Array of items to process
- * @param concurrency - Max concurrent operations
- * @param fn - Async function to call on each item
- * @returns Array of results in the same order as input
- */
-async function mapWithConcurrency<T, R>(
-  items: T[],
-  concurrency: number,
-  fn: (item: T) => Promise<R>
-): Promise<R[]> {
-  const results: R[] = new Array(items.length);
-  let nextIndex = 0;
-
-  async function worker(): Promise<void> {
-    while (nextIndex < items.length) {
-      const index = nextIndex++;
-      results[index] = await fn(items[index]);
-    }
-  }
-
-  // Start `concurrency` workers
-  const workers = Array.from({ length: Math.min(concurrency, items.length) }, worker);
-  await Promise.all(workers);
-
-  return results;
-}
-
-// =============================================================================
-// File Discovery (Phase 1 — fast readdir + stat for mtime sorting)
-// =============================================================================
-
-interface DiscoveredFile {
+export interface GeminiSession {
+  sessionId: string;
   filePath: string;
-  mtimeMs: number;
-  source: 'claude' | 'codex' | 'opencode';
+  workingDirectory: string;
+  model: string;
+  createdAt: Date;
+  modifiedAt: Date;
+  messages: Message[];
 }
 
 /**
- * Discover all persisted conversation sources, sorted by mtime descending.
- * Stats each source to get mtime for sorting (most recently modified first).
- * This enables progressive loading: recent conversations appear first.
+ * Discover all Gemini project directories that contain chat files.
+ * Scans ~/.gemini/tmp/{project}/chats/ for session-{ts}-{uuid}.json files.
+ * Returns paths to individual session JSON files.
  */
-async function discoverAllJsonlFiles(
-  claudeProjectsDir: string,
-  codexSessionsDir: string,
-  openCodeMessageDir: string,
-  openCodePartDir: string,
-  openCodeSessionIndex: Map<string, string>
-): Promise<DiscoveredFile[]> {
-  const files: DiscoveredFile[] = [];
+export async function getGeminiSessionFiles(
+  sessionsDir: string = GEMINI_SESSIONS_DIR
+): Promise<string[]> {
+  const files: string[] = [];
+  const projectDirs = await getProjectDirectories(sessionsDir);
 
-  async function scanSource(dirs: string[], source: 'claude' | 'codex') {
-    for (const projectDir of dirs) {
-      const jsonlPaths = await scanSessionDirectory(projectDir);
-      // Stat each file to get mtime (parallel within directory)
-      const statPromises = jsonlPaths.map(async (filePath) => {
-        try {
-          const stat = await fs.promises.stat(filePath);
-          return { filePath, mtimeMs: stat.mtimeMs, source };
-        } catch {
-          // File may have been deleted between readdir and stat
-          return null;
-        }
-      });
-      const results = await Promise.all(statPromises);
-      for (const result of results) {
-        if (result) files.push(result);
+  for (const projectDir of projectDirs) {
+    const chatsDir = path.join(projectDir, 'chats');
+    const sessionFiles = await scanJsonDirectory(chatsDir);
+    for (const f of sessionFiles) {
+      if (path.basename(f).startsWith('session-')) {
+        files.push(f);
       }
     }
   }
-
-  async function scanOpenCodeSource(sessionDirs: string[]) {
-    for (const sessionDirPath of sessionDirs) {
-      const sessionId = path.basename(sessionDirPath);
-      const metadataPath = openCodeSessionIndex.get(sessionId);
-      const mtimeMs = await getOpenCodeSessionMtime(sessionDirPath, openCodePartDir, metadataPath);
-      if (mtimeMs > 0) {
-        files.push({ filePath: sessionDirPath, mtimeMs, source: 'opencode' });
-      }
-    }
-  }
-
-  const [claudeDirs, codexDirs, openCodeDirs] = await Promise.all([
-    getProjectDirectories(claudeProjectsDir),
-    getCodexSessionDirectories(codexSessionsDir),
-    getOpenCodeSessionDirectories(openCodeMessageDir),
-  ]);
-
-  await Promise.all([
-    scanSource(claudeDirs, 'claude'),
-    scanSource(codexDirs, 'codex'),
-    scanOpenCodeSource(openCodeDirs),
-  ]);
-
-  // Sort by mtime descending (most recent first)
-  files.sort((a, b) => b.mtimeMs - a.mtimeMs);
 
   return files;
 }
 
-// =============================================================================
-// File Parsing (Phase 2 — parallelized with concurrency limit)
-// =============================================================================
-
-interface ParsedResult {
-  filePath: string;
-  mtimeMs: number;
-  conversation: Conversation | null;
-  parseTimeMs: number;
-}
-
 /**
- * Parse a single JSONL file and return the conversation.
- * Returns null if parsing fails or produces empty messages.
- * Includes timing metrics for performance analysis.
+ * Read the working directory for a Gemini project from its .project_root file.
+ * The .project_root file sits alongside the chats/ dir and contains the absolute path.
  */
-async function parseOneFile(
-  file: DiscoveredFile,
-  openCodePartDir: string,
-  openCodeSessionIndex: Map<string, string>
-): Promise<ParsedResult> {
-  const startTime = performance.now();
+async function readGeminiProjectRoot(sessionFilePath: string): Promise<string> {
+  // sessionFilePath = ~/.gemini/tmp/{project}/chats/session-*.json
+  const projectDir = path.dirname(path.dirname(sessionFilePath));
+  const projectRootFile = path.join(projectDir, '.project_root');
   try {
-    let conversation: Conversation | null;
-
-    if (file.source === 'codex') {
-      const session = await parseCodexJsonlFile(file.filePath);
-      if (session.entries.length === 0) {
-        const parseTimeMs = performance.now() - startTime;
-        return { filePath: file.filePath, mtimeMs: file.mtimeMs, conversation: null, parseTimeMs };
-      }
-      conversation = codexSessionToConversation(session);
-    } else if (file.source === 'claude') {
-      const session = await parseJsonlFile(file.filePath);
-      if (session.entries.length === 0) {
-        const parseTimeMs = performance.now() - startTime;
-        return { filePath: file.filePath, mtimeMs: file.mtimeMs, conversation: null, parseTimeMs };
-      }
-      conversation = jsonlSessionToConversation(session);
-    } else {
-      const session = await parseOpenCodeSessionDirectory(file.filePath, openCodePartDir, openCodeSessionIndex);
-      if (session.messages.length === 0) {
-        const parseTimeMs = performance.now() - startTime;
-        return { filePath: file.filePath, mtimeMs: file.mtimeMs, conversation: null, parseTimeMs };
-      }
-      conversation = openCodeSessionToConversation(session);
-    }
-
-    const parseTimeMs = performance.now() - startTime;
-
-    // null = hidden test conversation ([_HIDE_TEST_]) or empty messages — drop at ingestion.
-    if (!conversation || conversation.messages.length === 0) {
-      return { filePath: file.filePath, mtimeMs: file.mtimeMs, conversation: null, parseTimeMs };
-    }
-
-    return { filePath: file.filePath, mtimeMs: file.mtimeMs, conversation, parseTimeMs };
-  } catch (error: unknown) {
-    const parseTimeMs = performance.now() - startTime;
-    console.warn(`Failed to parse session: ${path.basename(file.filePath)} (${error instanceof Error ? error.message : error})`);
-    return { filePath: file.filePath, mtimeMs: 0, conversation: null, parseTimeMs };
+    const content = await fs.promises.readFile(projectRootFile, 'utf-8');
+    return content.trim();
+  } catch {
+    // Fallback: use project directory name as hint
+    return path.basename(projectDir);
   }
 }
 
 /**
- * Callback for progressive loading — invoked with batches of conversations.
- * Called multiple times during loading so clients receive data incrementally.
+ * Parse a Gemini session JSON file into a GeminiSession.
+ *
+ * Gemini session format:
+ *   { sessionId, projectHash, startTime, lastUpdated, messages[] }
+ *
+ * Message types:
+ *   user:   { type: "user",   content: [{ text: "..." }] }
+ *   gemini: { type: "gemini", content: "...", toolCalls?: [...], model?: "..." }
  */
-export type LoadProgressCallback = (batch: Conversation[], progress: { loaded: number; total: number }) => void;
+export async function parseGeminiSessionFile(filePath: string): Promise<GeminiSession> {
+  const raw = await fs.promises.readFile(filePath, 'utf-8');
+  const data = JSON.parse(raw) as Record<string, unknown>;
 
-/**
- * Load all conversations from Claude Code, Codex native session files, and
- * OpenCode local storage session files.
- *
- * Scans:
- * 1. ~/.claude/projects/* (Claude Code sessions)
- * 2. ~/.codex/sessions/YYYY/MM/DD/* (Codex native sessions)
- * 3. ~/.local/share/opencode/storage/message/* (OpenCode sessions)
- *
- * Phase 1: Discover all file paths + stat for mtime (sorted by mtime descending)
- * Phase 2: Parse files in parallel with bounded concurrency, emitting batches progressively
- *
- * Files are sorted by mtime descending (most recent first), so the onProgress callback
- * receives the most recently used conversations first. This enables the server to
- * broadcast batches to clients incrementally instead of waiting for all files.
- *
- * @param claudeProjectsDir - Directory containing Claude Code project folders
- * @param codexSessionsDir - Directory containing Codex native session files
- * @param openCodeMessageDir - Directory containing OpenCode message session folders
- * @param onProgress - Optional callback invoked with batches of parsed conversations
- * @returns conversations + mtime index for subsequent polling
- */
-export async function loadAllConversations(
-  claudeProjectsDir: string = CLAUDE_PROJECTS_DIR,
-  codexSessionsDir: string = CODEX_SESSIONS_DIR,
-  openCodeMessageDirOrOnProgress?: string | LoadProgressCallback,
-  maybeOnProgress?: LoadProgressCallback
-): Promise<LoadResult> {
-  const CONCURRENCY = 10; // macOS default fd limit is 256; 10 is very safe
-  const BATCH_SIZE = 50;  // Emit progress every N files
-  const openCodeMessageDir = typeof openCodeMessageDirOrOnProgress === 'string'
-    ? openCodeMessageDirOrOnProgress
-    : OPENCODE_MESSAGE_DIR;
-  const onProgress = typeof openCodeMessageDirOrOnProgress === 'function'
-    ? openCodeMessageDirOrOnProgress
-    : maybeOnProgress;
-  const openCodeStorageDir = path.dirname(openCodeMessageDir);
-  const openCodePartDir = path.join(openCodeStorageDir, 'part');
-  const openCodeSessionDir = path.join(openCodeStorageDir, 'session');
-  const openCodeSessionIndex = await getOpenCodeSessionMetadataIndex(openCodeSessionDir);
+  const sessionId = (data.sessionId as string) ?? path.basename(filePath, '.json');
+  const startTime = data.startTime ? new Date(data.startTime as string) : new Date();
+  const lastUpdated = data.lastUpdated ? new Date(data.lastUpdated as string) : startTime;
+  const workingDirectory = await readGeminiProjectRoot(filePath);
 
-  // Phase 1: Discover all files (sorted by mtime descending)
-  const discoverStart = performance.now();
-  console.log('Discovering persisted conversation files...');
-  const files = await discoverAllJsonlFiles(
-    claudeProjectsDir,
-    codexSessionsDir,
-    openCodeMessageDir,
-    openCodePartDir,
-    openCodeSessionIndex
-  );
-  const discoverTimeMs = performance.now() - discoverStart;
-  console.log(`Discovered ${files.length} persisted conversation sources in ${discoverTimeMs.toFixed(0)}ms (sorted by mtime), parsing with concurrency=${CONCURRENCY}...`);
+  const rawMessages = Array.isArray(data.messages) ? data.messages : [];
+  const messages: Message[] = [];
+  let model = 'unknown';
 
-  // Phase 2: Parse files in parallel with batched progress callbacks
-  const conversations = new Map<string, Conversation>();
-  const mtimes = new Map<string, number>();
-  const parseTimes: number[] = [];
-  let batchBuffer: Conversation[] = [];
-  let filesProcessed = 0;
+  for (const msg of rawMessages) {
+    const m = msg as Record<string, unknown>;
+    const type = m.type as string;
+    const timestamp = m.timestamp ? new Date(m.timestamp as string) : startTime;
 
-  // Process files with bounded concurrency, emitting batches as we go
-  const parseStart = performance.now();
+    if (type === 'user') {
+      // User content is an array of {text} blocks
+      const contentBlocks = Array.isArray(m.content) ? m.content : [];
+      const text = contentBlocks
+        .map((b: unknown) => {
+          const block = b as Record<string, unknown>;
+          return (block.text as string) ?? '';
+        })
+        .join('')
+        .trim();
+      if (text) {
+        messages.push({ role: 'user', content: text, timestamp });
+      }
+    } else if (type === 'gemini') {
+      // Gemini content is a string; may also have toolCalls
+      const content = (m.content as string) ?? '';
 
-  await mapWithConcurrency(files, CONCURRENCY, async (file) => {
-    const result = await parseOneFile(file, openCodePartDir, openCodeSessionIndex);
+      // Extract model from first gemini message
+      if (m.model && model === 'unknown') {
+        model = m.model as string;
+      }
 
-    // Track timing
-    parseTimes.push(result.parseTimeMs);
+      // Build display text: content + tool call summaries
+      const parts: string[] = [];
+      if (content) parts.push(content);
 
-    // Collect results
-    if (result.mtimeMs > 0) {
-      mtimes.set(result.filePath, result.mtimeMs);
-    }
-    if (result.conversation) {
-      conversations.set(result.conversation.id, result.conversation);
-      batchBuffer.push(result.conversation);
-    }
+      const toolCalls = Array.isArray(m.toolCalls) ? m.toolCalls : [];
+      for (const tc of toolCalls) {
+        const call = tc as Record<string, unknown>;
+        const name = (call.name as string) ?? 'tool';
+        const args = call.args as Record<string, unknown> | undefined;
+        const argSummary = args?.command ?? args?.file_path ?? args?.path ?? '';
+        parts.push(`[Tool: ${name}${argSummary ? ` ${argSummary}` : ''}]`);
+      }
 
-    filesProcessed++;
-
-    // Emit batch when threshold reached
-    if (onProgress && batchBuffer.length >= BATCH_SIZE) {
-      onProgress(batchBuffer, { loaded: filesProcessed, total: files.length });
-      batchBuffer = [];
-    }
-
-    return result;
-  });
-
-  // Emit any remaining conversations in the final batch
-  if (onProgress && batchBuffer.length > 0) {
-    onProgress(batchBuffer, { loaded: filesProcessed, total: files.length });
-  }
-
-  const parseTimeMs = performance.now() - parseStart;
-
-  // Log timing summary
-  if (parseTimes.length > 0) {
-    const sorted = [...parseTimes].sort((a, b) => a - b);
-    const min = sorted[0];
-    const max = sorted[sorted.length - 1];
-    const avg = parseTimes.reduce((a, b) => a + b, 0) / parseTimes.length;
-    const median = sorted[Math.floor(sorted.length / 2)];
-    const p95 = sorted[Math.floor(sorted.length * 0.95)];
-
-    console.log(`Parse timing (${parseTimes.length} files): min=${min.toFixed(1)}ms, avg=${avg.toFixed(1)}ms, median=${median.toFixed(1)}ms, p95=${p95.toFixed(1)}ms, max=${max.toFixed(1)}ms`);
-  }
-
-  const totalTimeMs = discoverTimeMs + parseTimeMs;
-  console.log(`Loaded ${conversations.size} conversations from ${files.length} files in ${totalTimeMs.toFixed(0)}ms (discover: ${discoverTimeMs.toFixed(0)}ms, parse: ${parseTimeMs.toFixed(0)}ms)`);
-
-  return { conversations, mtimes };
-}
-
-// =============================================================================
-// File Polling — detect external changes to persisted conversation sources
-//
-// Compares file mtimes against a previous index. Only re-parses files that
-// changed. Skips conversations that are actively running (in-memory state
-// is authoritative for those).
-//
-// NOTE: No dir-level mtime gate. Directory mtime only changes when files are
-// added/removed, NOT when existing files are modified. Since we need to detect
-// external writes to existing session files, we must stat source files directly.
-// Individual stat calls are cheap (microseconds).
-// =============================================================================
-
-/**
- * Poll for changes to persisted session sources since the last check.
- *
- * @param prevMtimes - Previous mtime index (filepath → mtime ms)
- * @param activeIds - Conversation IDs currently running (skip these)
- * @returns Changed conversations + updated mtime index
- */
-export async function pollForChanges(
-  prevMtimes: Map<string, number>,
-  activeIds: Set<string>,
-  claudeProjectsDir: string = CLAUDE_PROJECTS_DIR,
-  codexSessionsDir: string = CODEX_SESSIONS_DIR,
-  openCodeMessageDir: string = OPENCODE_MESSAGE_DIR
-): Promise<PollResult> {
-  const updated = new Map<string, Conversation>();
-  const mtimes = new Map(prevMtimes);
-  const openCodeStorageDir = path.dirname(openCodeMessageDir);
-  const openCodePartDir = path.join(openCodeStorageDir, 'part');
-  const openCodeSessionDir = path.join(openCodeStorageDir, 'session');
-
-  async function scanSource(dirs: string[], source: 'claude' | 'codex') {
-    for (const projectDir of dirs) {
-      const jsonlFiles = await scanSessionDirectory(projectDir);
-
-      for (const filePath of jsonlFiles) {
-        try {
-          const stat = await fs.promises.stat(filePath);
-          const prevMtime = prevMtimes.get(filePath);
-
-          // Skip if file mtime unchanged
-          if (prevMtime !== undefined && stat.mtimeMs <= prevMtime) {
-            continue;
-          }
-
-          // File is new or changed — re-parse
-          mtimes.set(filePath, stat.mtimeMs);
-
-          // Fast skip for active sessions.
-          if (source === 'claude') {
-            const sessionId = path.basename(filePath, '.jsonl');
-            if (activeIds.has(sessionId)) {
-              continue;
-            }
-          } else {
-            const sessionIdHint = extractCodexSessionIdFromFilename(filePath);
-            if (sessionIdHint && activeIds.has(sessionIdHint)) {
-              continue;
-            }
-          }
-
-          let conversation: Conversation | null;
-          if (source === 'codex') {
-            const session = await parseCodexJsonlFile(filePath);
-            if (session.entries.length === 0) continue;
-            conversation = codexSessionToConversation(session);
-          } else {
-            const session = await parseJsonlFile(filePath);
-            if (session.entries.length === 0) continue;
-            conversation = jsonlSessionToConversation(session);
-          }
-
-          // null = hidden test conversation ([_HIDE_TEST_]) — dropped at ingestion.
-          if (!conversation) continue;
-          if (activeIds.has(conversation.id)) continue;
-          if (conversation.messages.length === 0) continue;
-
-          updated.set(conversation.id, conversation);
-        } catch (error: unknown) {
-          console.warn(`[Poll] Failed to parse: ${path.basename(filePath)} (${error instanceof Error ? error.message : error})`);
-        }
+      const fullContent = parts.join('\n').trim();
+      if (fullContent) {
+        messages.push({ role: 'assistant', content: fullContent, timestamp });
       }
     }
   }
 
-  async function scanOpenCodeSource(sessionDirs: string[], sessionMetadataIndex: Map<string, string>) {
-    for (const sessionDirPath of sessionDirs) {
-      try {
-        const sessionIdHint = path.basename(sessionDirPath);
-        const metadataPath = sessionMetadataIndex.get(sessionIdHint);
-        const mtimeMs = await getOpenCodeSessionMtime(sessionDirPath, openCodePartDir, metadataPath);
-        if (mtimeMs <= 0) {
-          continue;
-        }
-
-        const prevMtime = prevMtimes.get(sessionDirPath);
-        if (prevMtime !== undefined && mtimeMs <= prevMtime) {
-          continue;
-        }
-
-        mtimes.set(sessionDirPath, mtimeMs);
-
-        if (activeIds.has(sessionIdHint)) {
-          continue;
-        }
-
-        const session = await parseOpenCodeSessionDirectory(sessionDirPath, openCodePartDir, sessionMetadataIndex);
-        if (session.messages.length === 0) {
-          continue;
-        }
-
-        const conversation = openCodeSessionToConversation(session);
-        // null = hidden test conversation ([_HIDE_TEST_]) — dropped at ingestion.
-        if (!conversation) continue;
-        if (activeIds.has(conversation.id)) continue;
-        if (conversation.messages.length === 0) continue;
-
-        updated.set(conversation.id, conversation);
-      } catch (error: unknown) {
-        console.warn(`[Poll] Failed to parse OpenCode session: ${path.basename(sessionDirPath)} (${error instanceof Error ? error.message : error})`);
-      }
-    }
-  }
-
-  const [claudeDirs, codexDirs, openCodeDirs, openCodeSessionIndex] = await Promise.all([
-    getProjectDirectories(claudeProjectsDir),
-    getCodexSessionDirectories(codexSessionsDir),
-    getOpenCodeSessionDirectories(openCodeMessageDir),
-    getOpenCodeSessionMetadataIndex(openCodeSessionDir),
-  ]);
-
-  await scanSource(claudeDirs, 'claude');
-  await scanSource(codexDirs, 'codex');
-  await scanOpenCodeSource(openCodeDirs, openCodeSessionIndex);
-
-  return { updated, mtimes };
+  return {
+    sessionId,
+    filePath,
+    workingDirectory: normalizeDirPath(workingDirectory),
+    model,
+    createdAt: startTime,
+    modifiedAt: lastUpdated,
+    messages,
+  };
 }
+
+// loadAllConversations, pollForChanges, mapWithConcurrency, discoverAllJsonlFiles,
+// parseOneFile, LoadResult, PollResult, LoadProgressCallback, DiscoveredFile
+// have been removed from jsonl.ts.
+// They are replaced by the generic registry-driven loader in loader.ts.
+// See server/src/adapters/loader.ts for the new implementation.

@@ -113,8 +113,8 @@ export {
 // Core Data Structures
 // =============================================================================
 
-// Provider enum for multi-CLI support (Claude, Codex, OpenCode, etc.)
-export const ProviderSchema = z.enum(['claude', 'codex', 'opencode']);
+// Provider enum for multi-CLI support (Claude, Codex, OpenCode, Gemini, etc.)
+export const ProviderSchema = z.enum(['claude', 'codex', 'opencode', 'gemini']);
 export type Provider = z.infer<typeof ProviderSchema>;
 
 // =============================================================================
@@ -134,6 +134,14 @@ export type Provider = z.infer<typeof ProviderSchema>;
 
 export const ClaudeModelSchema = z.enum(['opus', 'sonnet', 'haiku']);
 export type ClaudeModel = z.infer<typeof ClaudeModelSchema>;
+
+export const GeminiModelSchema = z.enum([
+  'gemini-3-pro-preview',
+  'gemini-2.5-pro',
+  'gemini-2.5-flash',
+  'gemini-2.0-flash',
+]);
+export type GeminiModel = z.infer<typeof GeminiModelSchema>;
 
 export const CodexModelSchema = z.enum([
   'gpt-5.3-codex-medium', 'gpt-5.3-codex-high', 'gpt-5.3-codex-xhigh',
@@ -155,7 +163,7 @@ export const OpenCodeModelSchema = z.custom<OpenCodeModel>(
   }
 );
 
-export const ModelIdSchema = z.union([ClaudeModelSchema, CodexModelSchema, OpenCodeModelSchema]);
+export const ModelIdSchema = z.union([ClaudeModelSchema, CodexModelSchema, GeminiModelSchema, OpenCodeModelSchema]);
 export type ModelId = z.infer<typeof ModelIdSchema>;
 
 /** Display metadata returned by Provider.listModels() for the model dropdown */

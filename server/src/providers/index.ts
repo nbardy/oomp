@@ -33,6 +33,7 @@ import type { SpawnOptionsWithoutStdio } from 'node:child_process';
 import claudeProvider from './claude';
 import codexProvider from './codex';
 import opencodeProvider from './opencode';
+import geminiProvider from './gemini';
 
 // =============================================================================
 // Error Types
@@ -182,11 +183,12 @@ const providers: Record<ProviderName, Provider> = {
   claude: claudeProvider,
   codex: codexProvider,
   opencode: opencodeProvider,
+  gemini: geminiProvider,
 };
 
 /**
  * Get a provider by name
- * @param name - Provider name ('claude', 'codex', or 'opencode')
+ * @param name - Provider name ('claude', 'codex', 'opencode', or 'gemini')
  * @throws Error if provider not found
  */
 export function getProvider(name: ProviderName): Provider {

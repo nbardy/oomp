@@ -410,6 +410,16 @@ export function Sidebar() {
                   />
                   OpenCode
                 </label>
+                <label className={`provider-option ${provider === 'gemini' ? 'selected' : ''}`}>
+                  <input
+                    type="radio"
+                    name="provider"
+                    value="gemini"
+                    checked={provider === 'gemini'}
+                    onChange={() => setProvider('gemini')}
+                  />
+                  Gemini
+                </label>
               </div>
               <label className="new-conv-label">Model</label>
               <div className="model-selector">

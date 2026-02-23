@@ -76,6 +76,10 @@
   background: color-mix(in srgb, var(--green) 20%, transparent);
   color: var(--green);
 }
+.provider-badge.provider-gemini {
+  background: color-mix(in oklch, var(--blue), transparent 75%);
+  color: var(--blue-bright);
+}
 
 .provider-picker {
   position: relative;

@@ -25,7 +25,7 @@ import type {
 import express, { type Request, type Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { WebSocket, WebSocketServer } from 'ws';
-import { loadAllConversations, pollForChanges } from './adapters/jsonl';
+import { loadAllConversations, pollForChanges } from './adapters/loader';
 import { type Provider, ProviderParseError, getProvider } from './providers';
 import { isModelIdValidForProvider, modelValidationHint } from './providers/model-validation';
 
