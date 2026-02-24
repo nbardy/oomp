@@ -40,10 +40,7 @@ interface UsageData {
   days: number;
   daily: DailyUsage[];
   topSessions: SessionUsage[];
-  rateLimits: {
-    codex: RateLimit[];
-    claude: RateLimit[];
-  };
+  rateLimits: Record<Provider, RateLimit[]>;
 }
 
 type ProviderTab = 'all' | Provider;
@@ -160,9 +157,6 @@ export function UsagePanel({ onClose }: Props) {
   const maxDailyCost =
     filteredDaily.length > 0 ? Math.max(...filteredDaily.map((d) => d.costUsd)) : 0;
 
-  const hasClaude = data ? data.rateLimits.claude.length > 0 : false;
-  const hasCodex = data ? data.rateLimits.codex.length > 0 : false;
-
   return (
     <div
       className="usage-overlay"
@@ -207,23 +201,22 @@ export function UsagePanel({ onClose }: Props) {
                 ))}
               </div>
 
-              {/* Rate Limit Gauges */}
-              {(tab === 'all' || tab === 'codex') && hasCodex && (
-                <div className="usage-rate-group">
-                  <span className="usage-rate-provider">Codex</span>
-                  {data.rateLimits.codex.map((rl) => (
-                    <RateLimitGauge key={rl.label} rl={rl} />
-                  ))}
-                </div>
-              )}
-              {(tab === 'all' || tab === 'claude') && hasClaude && (
-                <div className="usage-rate-group">
-                  <span className="usage-rate-provider">Claude</span>
-                  {data.rateLimits.claude.map((rl) => (
-                    <RateLimitGauge key={rl.label} rl={rl} />
-                  ))}
-                </div>
-              )}
+              {/* Rate Limit Gauges (Dynamic for all providers) */}
+              {Object.entries(data.rateLimits).map(([p, rls]) => {
+                const providerId = p as Provider;
+                const metadata = getProviderMetadata(providerId);
+                const show = (tab === 'all' || tab === providerId) && rls.length > 0;
+                if (!show) return null;
+
+                return (
+                  <div key={providerId} className="usage-rate-group">
+                    <span className="usage-rate-provider">{metadata.label}</span>
+                    {rls.map((rl) => (
+                      <RateLimitGauge key={rl.label} rl={rl} />
+                    ))}
+                  </div>
+                );
+              })}
 
               {/* Token + cost summary */}
               <div className="usage-stats-row">

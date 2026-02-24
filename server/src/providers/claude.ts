@@ -198,6 +198,7 @@ const claudeProvider: Provider = {
       command: spec.argv[0],
       args: spec.argv.slice(1),
       options: { cwd: workingDir },
+      stdin: spec.stdin,
       stdout: spec.stdout,
     };
   },
@@ -208,6 +209,7 @@ const claudeProvider: Provider = {
       command: 'claude',
       args: ['-p', prompt, '--output-format', 'text'],
       options: {},
+      stdin: 'close',
       stdout: 'text',
     };
   },

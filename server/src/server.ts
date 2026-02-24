@@ -236,7 +236,8 @@ class Conversation extends EventEmitter {
     this.isRunning = false;
     this.isStreaming = false;
     this.createdAt = new Date();
-    this.workingDirectory = workingDirectory || process.cwd();
+    // Resolve to absolute path: sessions are identified by absolute path in oompa
+    this.workingDirectory = path.resolve(workingDirectory || process.cwd());
     this.provider = provider;
     this.model = model;
     this.isWorker = isWorker;
@@ -473,10 +474,16 @@ class Conversation extends EventEmitter {
       this.processQueue();
     });
 
-    // Write message and close stdin to trigger processing
-    console.log(`[${this.id}] Writing to stdin and closing...`);
-    this.process.stdin?.write(content + '\n');
-    this.process.stdin?.end();
+    // Write message and close stdin ONLY if the provider expects it.
+    // Claude expects prompt on stdin. Gemini/Codex take it via flags.
+    if (spawnConfig.stdin === 'prompt') {
+      console.log(`[${this.id}] Writing prompt to stdin and closing...`);
+      this.process.stdin?.write(content + '\n');
+      this.process.stdin?.end();
+    } else {
+      console.log(`[${this.id}] Closing stdin immediately (stdin mode: ${spawnConfig.stdin})`);
+      this.process.stdin?.end();
+    }
   }
 
   /**
@@ -1008,9 +1015,9 @@ wss.on('connection', (ws: WebSocket) => {
               process.env.HOME || process.env.USERPROFILE || ''
             );
           }
-          // Normalize path: remove trailing slashes, resolve . and ..
+          // Resolve to absolute path and normalize: remove trailing slashes, resolve . and ..
           // so "/foo/bar/" and "/foo/bar" group as the same project
-          workingDir = path.normalize(workingDir).replace(/\/+$/, '');
+          workingDir = path.resolve(workingDir).replace(/\/+$/, '');
           const provider = data.provider || 'claude'; // Support 'claude', 'codex', or 'opencode'
           const model = data.model; // Provider-specific model (undefined = provider default)
           const swarmDebugPrefix = data.swarmDebugPrefix ?? null;
@@ -2989,7 +2996,12 @@ app.get('/api/usage', async (_req: Request, res: Response) => {
 
   // --- Codex sessions (single pass: usage entries + rate limits from most recent) ---
   const codexDir = path.join(os.homedir(), '.codex', 'sessions');
-  const rateLimits: { codex: RateLimit[]; claude: RateLimit[] } = { codex: [], claude: [] };
+  const rateLimits: Record<ProviderName, RateLimit[]> = {
+    claude: [],
+    codex: [],
+    opencode: [],
+    gemini: [],
+  };
   let newestCodexFile = '';
   let newestCodexMtime = 0;
 

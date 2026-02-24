@@ -59,6 +59,7 @@ const geminiProvider: Provider = {
         cwd: workingDir,
         stdio: ['pipe', 'pipe', 'pipe'],
       },
+      stdin: spec.stdin,
       stdout: spec.stdout,
     };
   },
@@ -68,6 +69,7 @@ const geminiProvider: Provider = {
       command: 'gemini',
       args: ['-p', prompt, '-y'],
       options: {},
+      stdin: 'close',
       stdout: 'text',
     };
   },

@@ -39,9 +39,9 @@ import {
 } from '@claude-web-view/shared';
 
 /** Canonicalize a directory path: resolve `.`/`..` and strip trailing slashes
- *  so "/foo/bar/" and "/foo/bar" group as the same project. */
+ *  so "/foo/bar/" and "/foo/bar" group as the same project. Always returns absolute path. */
 function normalizeDirPath(dir: string): string {
-  return path.normalize(dir).replace(/\/+$/, '');
+  return path.resolve(dir).replace(/\/+$/, '');
 }
 
 // =============================================================================

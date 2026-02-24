@@ -30,7 +30,7 @@
 
 import type { SpawnOptionsWithoutStdio } from 'node:child_process';
 import type { ModelInfo, Provider as ProviderName } from '@claude-web-view/shared';
-import type { StdoutBehavior } from '@nbardy/agent-cli';
+import type { StdinBehavior, StdoutBehavior } from '@nbardy/agent-cli';
 import claudeProvider from './claude';
 import codexProvider from './codex';
 import geminiProvider from './gemini';
@@ -67,6 +67,7 @@ export interface SpawnConfig {
   command: string;
   args: string[];
   options: SpawnOptionsWithoutStdio;
+  stdin: StdinBehavior;
   stdout: StdoutBehavior;
 }
 

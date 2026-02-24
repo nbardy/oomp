@@ -168,6 +168,7 @@ const opencodeProvider: Provider = {
         cwd: workingDir,
         stdio: ['pipe', 'pipe', 'pipe'],
       },
+      stdin: spec.stdin,
       stdout: spec.stdout,
     };
   },
@@ -177,6 +178,7 @@ const opencodeProvider: Provider = {
       command: 'opencode',
       args: ['run', prompt],
       options: {},
+      stdin: 'close',
       stdout: 'text',
     };
   },
