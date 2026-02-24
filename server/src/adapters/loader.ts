@@ -176,7 +176,10 @@ async function parseOneFile(file: DiscoveredFile): Promise<ParsedResult> {
  * @param onProgress - Optional callback invoked with batches of parsed conversations
  * @returns conversations + mtime index for subsequent polling
  */
-export async function loadAllConversations(onProgress?: LoadProgressCallback): Promise<LoadResult> {
+export async function loadAllConversations(
+  onProgress?: LoadProgressCallback,
+  limit?: number
+): Promise<LoadResult> {
   const CONCURRENCY = 10; // macOS default fd limit is 256; 10 is very safe
   const BATCH_SIZE = 50; // Emit progress every N files
 
@@ -195,6 +198,15 @@ export async function loadAllConversations(onProgress?: LoadProgressCallback): P
   // avoids doubling peak memory by holding two copies of every parsed conversation.
   const conversations = onProgress ? null : new Map<string, Conversation>();
   const mtimes = new Map<string, number>();
+
+  // Add ALL discovered files to the mtimes map immediately, so file watcher tracks them
+  // even if they are older and skipped during the initial parsing phase.
+  for (const file of files) {
+    if (file.mtimeMs > 0) {
+      mtimes.set(file.filePath, file.mtimeMs);
+    }
+  }
+
   // Running accumulators for parse timing — avoids allocating a 1500-element array
   // just to compute summary stats that are immediately discarded after logging.
   let parseTimeMin = Number.POSITIVE_INFINITY,
@@ -207,7 +219,9 @@ export async function loadAllConversations(onProgress?: LoadProgressCallback): P
 
   const parseStart = performance.now();
 
-  await forEachWithConcurrency(files, CONCURRENCY, async (file) => {
+  const filesToParse = limit && limit > 0 ? files.slice(0, limit) : files;
+
+  await forEachWithConcurrency(filesToParse, CONCURRENCY, async (file) => {
     const result = await parseOneFile(file);
 
     const t = result.parseTimeMs;
@@ -216,9 +230,6 @@ export async function loadAllConversations(onProgress?: LoadProgressCallback): P
     parseTimeSum += t;
     parseTimeCount++;
 
-    if (result.mtimeMs > 0) {
-      mtimes.set(result.filePath, result.mtimeMs);
-    }
     if (result.conversation) {
       conversations?.set(result.conversation.id, result.conversation);
       batchBuffer.push(result.conversation);
@@ -228,14 +239,14 @@ export async function loadAllConversations(onProgress?: LoadProgressCallback): P
     filesProcessed++;
 
     if (onProgress && batchBuffer.length >= BATCH_SIZE) {
-      onProgress(batchBuffer, { loaded: filesProcessed, total: files.length });
+      onProgress(batchBuffer, { loaded: filesProcessed, total: filesToParse.length });
       batchBuffer = [];
     }
   });
 
   // Emit any remaining conversations in the final batch
   if (onProgress && batchBuffer.length > 0) {
-    onProgress(batchBuffer, { loaded: filesProcessed, total: files.length });
+    onProgress(batchBuffer, { loaded: filesProcessed, total: filesToParse.length });
   }
 
   const parseTimeMs = performance.now() - parseStart;
@@ -250,7 +261,7 @@ export async function loadAllConversations(onProgress?: LoadProgressCallback): P
 
   const totalTimeMs = discoverTimeMs + parseTimeMs;
   console.log(
-    `Loaded ${conversationCount} conversations from ${files.length} files in ${totalTimeMs.toFixed(0)}ms (discover: ${discoverTimeMs.toFixed(0)}ms, parse: ${parseTimeMs.toFixed(0)}ms)`
+    `Loaded ${conversationCount} conversations from ${filesToParse.length} files in ${totalTimeMs.toFixed(0)}ms (discover: ${discoverTimeMs.toFixed(0)}ms, parse: ${parseTimeMs.toFixed(0)}ms)`
   );
 
   return { conversations: conversations ?? new Map(), mtimes };
