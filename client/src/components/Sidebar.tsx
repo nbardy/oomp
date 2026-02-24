@@ -573,9 +573,9 @@ export function Sidebar() {
                           title={`New conversation in ${dirDisplay}`}
                           onClick={(e) => {
                             e.stopPropagation();
-                            createConversation(group.directory, provider, model);
-                            const newId = jotaiStore.get(activeConversationIdAtom);
-                            if (newId) navigate(`/chat/${newId}`);
+                            setDirectory(group.directory);
+                            setHasPendingDefault(false);
+                            setShowPicker(true);
                           }}
                         >
                           +
