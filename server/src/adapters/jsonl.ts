@@ -1186,8 +1186,10 @@ async function readGeminiProjectRoot(sessionFilePath: string): Promise<string> {
     const content = await fs.promises.readFile(projectRootFile, 'utf-8');
     return content.trim();
   } catch {
-    // Fallback: use project directory name as hint
-    return path.basename(projectDir);
+    // Fallback: return the gemini tmp dir itself (absolute).
+    // Without .project_root the real project path is unknown, but returning
+    // the absolute tmp dir prevents a relative-path 400 from /api/swarm-runtime.
+    return projectDir;
   }
 }
 

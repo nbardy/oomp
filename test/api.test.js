@@ -20,7 +20,7 @@ let serverProcess = null;
 function startServer() {
   return new Promise((resolve, reject) => {
     const env = { ...process.env, PORT: PORT };
-    serverProcess = spawn('node', ['src/server.js'], {
+    serverProcess = spawn('npx', ['tsx', 'src/server.ts'], {
       cwd: path.join(__dirname, '..', 'server'),
       env,
       stdio: ['pipe', 'pipe', 'pipe'],

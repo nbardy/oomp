@@ -23,7 +23,7 @@ import { persist } from 'zustand/middleware';
 //
 // draft:{conversationId}   — Written from uncontrolled textarea via refs in
 //                            Chat.tsx. Must bypass React render cycle.
-// pendingConversations     — Read/written inside conversationStore.ts during
+// pendingConversations     — Read/written inside actions.ts during
 //                            WebSocket init (non-React context).
 // ---------------------------------------------------------------------------
 export const DRAFT_KEY_PREFIX = 'draft:';

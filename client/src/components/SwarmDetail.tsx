@@ -9,7 +9,9 @@ import type {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useSwarmRuntimeSnapshots } from '../hooks/useSwarmRuntimeSnapshots';
-import { useConversationStore } from '../stores/conversationStore';
+import { useAtomValue } from 'jotai';
+import { createConversation } from '../atoms/actions';
+import { allConversationsAtom, conversationAtomFamily } from '../atoms/conversations';
 import { useUIStore } from '../stores/uiStore';
 import { getProjectName, getProjectRoot } from '../utils/swarmUtils';
 import { getWorkerVisibilitySummary } from '../utils/swarmWorkerVisibility';
@@ -200,9 +202,7 @@ function WorkerChatPane({
   accentColor: 'cyan' | 'magenta';
   runningState: 'running' | 'idle';
 }) {
-  const conversation = useConversationStore((s) =>
-    conversationId ? (s.conversations.get(conversationId) ?? null) : null
-  );
+  const conversation = useAtomValue(conversationAtomFamily(conversationId ?? ''));
   const isStreaming = conversation?.isStreaming ?? false;
 
   // ALL hooks before any early return (React hook ordering rule)
@@ -591,7 +591,7 @@ export function SwarmDetail() {
   const projectRoot = searchParams.get('project') ?? '';
   const navigate = useNavigate();
 
-  const conversations = useConversationStore((s) => s.conversations);
+  const allConversations = useAtomValue(allConversationsAtom);
   const promotedWorkers = useUIStore((s) => s.promotedWorkers);
   const promotedSet = useMemo(() => new Set(promotedWorkers), [promotedWorkers]);
   const runtimeSnapshots = useSwarmRuntimeSnapshots(projectRoot ? [projectRoot] : []);
@@ -627,8 +627,6 @@ export function SwarmDetail() {
   const [activeTab, setActiveTab] = useState<SwarmTab>('runs');
 
   // Swarm debug conversation: create a new Claude conversation pre-seeded with swarm context
-  const createConversation = useConversationStore((s) => s.createConversation);
-
   const handleStartDebugConversation = useCallback(async () => {
     const swarmId = runtimeSnapshot?.run?.swarmId ?? null;
     const configPath = runtimeSnapshot?.run?.configPath ?? null;
@@ -662,7 +660,7 @@ export function SwarmDetail() {
     const execs: Conversation[] = [];
     const reviewsAndFixes: Conversation[] = [];
 
-    for (const conv of conversations.values()) {
+    for (const conv of allConversations) {
       if (!conv.isWorker || promotedSet.has(conv.id)) continue;
       if (getProjectRoot(conv.workingDirectory) !== projectRoot) continue;
 
@@ -723,7 +721,7 @@ export function SwarmDetail() {
       reviewCount: reviewsAndFixes.filter((r) => r.workerRole === 'review').length,
       fixCount: reviewsAndFixes.filter((r) => r.workerRole === 'fix').length,
     };
-  }, [conversations, promotedSet, projectRoot, isWorkerRunningLive]);
+  }, [allConversations, promotedSet, projectRoot, isWorkerRunningLive]);
 
   // Selected exec group — click a worker to show task log (left) + review (right)
   const [selectedGroupIdx, setSelectedGroupIdx] = useState<number>(0);
@@ -744,16 +742,16 @@ export function SwarmDetail() {
   const reviewPaneId = selectedGroup?.reviews[0]?.id ?? null;
   const taskPaneRunning = useMemo(() => {
     if (!taskPaneId) return false;
-    const taskConv = conversations.get(taskPaneId);
+    const taskConv = allConversations.find((c) => c.id === taskPaneId);
     if (!taskConv) return false;
     return isWorkerRunningLive(taskConv);
-  }, [conversations, taskPaneId, isWorkerRunningLive]);
+  }, [allConversations, taskPaneId, isWorkerRunningLive]);
   const reviewPaneRunning = useMemo(() => {
     if (!reviewPaneId) return false;
-    const reviewConv = conversations.get(reviewPaneId);
+    const reviewConv = allConversations.find((c) => c.id === reviewPaneId);
     if (!reviewConv) return false;
     return isWorkerRunningLive(reviewConv);
-  }, [conversations, reviewPaneId, isWorkerRunningLive]);
+  }, [allConversations, reviewPaneId, isWorkerRunningLive]);
 
   // Computed stats
   const workerVisibility = useMemo(

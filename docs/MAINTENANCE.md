@@ -148,18 +148,18 @@ useEffect(() => {
 
 **BAD** — re-renders on ANY store change:
 ```tsx
-const store = useConversationStore();
+
 ```
 
 **GOOD** — re-renders only when THIS field changes:
 ```tsx
-const conversation = useConversationStore((s) => s.conversations.get(id) ?? null);
+const conversation = useAtomValue(conversationAtomFamily(id));
 ```
 
 **EVEN BETTER** — use module-level constant for stable fallback:
 ```tsx
 const EMPTY_QUEUE: QueuedMessage[] = [];
-const queue = useConversationStore((s) => s.queues.get(id) ?? EMPTY_QUEUE);
+const queue = useAtomValue(conversationAtomFamily(id))?.queue ?? EMPTY_QUEUE;
 ```
 
 ### Race Condition with setState Closures
@@ -200,7 +200,7 @@ const useStore = create((set, get) => ({
 
 **Problem**: Text chunks arrive 100-200 times per response (1-20 chars each). Each chunk triggers React re-render → Markdown re-parse of ALL messages. On long threads this is catastrophic.
 
-**Solution** (conversationStore.ts, lines 16-59): Accumulate chunks in a plain object outside React state, flush to Zustand once per animation frame (~60Hz). This collapses 100-200 updates into ~3-10 updates.
+**Solution** (actions.ts / conversations.ts, lines 16-59): Accumulate chunks in a plain object outside React state, flush to Zustand once per animation frame (~60Hz). This collapses 100-200 updates into ~3-10 updates.
 
 **Key code**:
 ```typescript
@@ -281,9 +281,9 @@ Some keys can't live in Zustand persist because they're accessed in non-React co
 - Location: Chat.tsx, lines ~200-220
 
 **`pendingConversations`**:
-- Read/written inside conversationStore.ts during WebSocket init
+- Read/written inside actions.ts / conversations.ts during WebSocket init
 - Tracks optimistically created conversations before server confirms
-- Location: conversationStore.ts, lines 104-123
+- Location: actions.ts / conversations.ts, lines 104-123
 
 **Documented in**: `uiStore.ts`, lines 15-23
 
@@ -424,7 +424,7 @@ If you're working on this codebase and have questions about design decisions:
 
 1. Check `CLAUDE.md` for project-wide rules
 2. Check `docs/` for feature-specific design docs
-3. Check file-level comments (especially `conversationStore.ts`, `uiStore.ts`)
+3. Check file-level comments (especially `actions.ts / conversations.ts`, `uiStore.ts`)
 4. For NEW badge feature: See `docs/new_badge_feature.md`
 
 **Key design principles**:

@@ -2,7 +2,8 @@ import type { Conversation } from '@claude-web-view/shared';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSwarmRuntimeSnapshots } from '../hooks/useSwarmRuntimeSnapshots';
-import { useConversationStore } from '../stores/conversationStore';
+import { useAtomValue } from 'jotai';
+import { allConversationsAtom } from '../atoms/conversations';
 import { useUIStore } from '../stores/uiStore';
 import { getProjectColor } from '../utils/projectColors';
 import { getProjectName, getProjectRoot } from '../utils/swarmUtils';
@@ -26,14 +27,14 @@ interface SwarmProject {
 }
 
 export function SwarmDashboard() {
-  const conversations = useConversationStore((s) => s.conversations);
+  const allConversations = useAtomValue(allConversationsAtom);
   const navigate = useNavigate();
   const promotedWorkers = useUIStore((s) => s.promotedWorkers);
   const promotedSet = useMemo(() => new Set(promotedWorkers), [promotedWorkers]);
   const workerConversationsByProject = useMemo(() => {
     const groups = new Map<string, Conversation[]>();
 
-    for (const conv of conversations.values()) {
+    for (const conv of allConversations) {
       if (!conv.isWorker || promotedSet.has(conv.id)) continue;
       const root = getProjectRoot(conv.workingDirectory);
       if (!groups.has(root)) groups.set(root, []);
@@ -41,7 +42,7 @@ export function SwarmDashboard() {
     }
 
     return groups;
-  }, [conversations, promotedSet]);
+  }, [allConversations, promotedSet]);
   const runtimeProjectRoots = useMemo(
     () => Array.from(workerConversationsByProject.keys()).sort(),
     [workerConversationsByProject]

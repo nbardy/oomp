@@ -6,7 +6,8 @@ import type {
 } from '@claude-web-view/shared';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useConversationStore } from '../stores/conversationStore';
+import { useAtomValue } from 'jotai';
+import { allConversationsAtom } from '../atoms/conversations';
 import { useUIStore } from '../stores/uiStore';
 import { getProjectColor } from '../utils/projectColors';
 import { getProjectName, getProjectRoot } from '../utils/swarmUtils';
@@ -505,7 +506,7 @@ function StatsPanel({ runData }: StatsPanelProps) {
 
 export function SwarmAnalytics() {
   const navigate = useNavigate();
-  const conversations = useConversationStore((s) => s.conversations);
+  const allConversations = useAtomValue(allConversationsAtom);
   const promotedWorkers = useUIStore((s) => s.promotedWorkers);
   const promotedSet = useMemo(() => new Set(promotedWorkers), [promotedWorkers]);
 
@@ -521,7 +522,7 @@ export function SwarmAnalytics() {
   const projects = useMemo((): SwarmProject[] => {
     const groups = new Map<string, Conversation[]>();
 
-    for (const conv of conversations.values()) {
+    for (const conv of allConversations) {
       if (!conv.isWorker || promotedSet.has(conv.id)) continue;
       const root = getProjectRoot(conv.workingDirectory);
       if (!groups.has(root)) groups.set(root, []);
@@ -544,7 +545,7 @@ export function SwarmAnalytics() {
         };
       })
       .sort((a, b) => b.workers.length - a.workers.length);
-  }, [conversations, promotedSet]);
+  }, [allConversations, promotedSet]);
 
   // Fetch runs data when project is selected
   useEffect(() => {

@@ -1,5 +1,6 @@
+import { useAtomValue } from 'jotai';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useConversationStore } from '../stores/conversationStore';
+import { allConversationsAtom } from '../atoms/conversations';
 import { formatTimeAgo } from '../utils/time';
 import './SearchPalette.css';
 
@@ -69,7 +70,8 @@ function highlightMatch(snippet: string, query: string): React.ReactNode[] {
 }
 
 export function SearchPalette({ isOpen, onClose, onSelectConversation, filterDirectory }: Props) {
-  const conversations = useConversationStore((s) => s.conversations);
+  // allConversationsAtom is stable during streaming — no snapshot hack needed
+  const allConversations = useAtomValue(allConversationsAtom);
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [debouncedQuery, setDebouncedQuery] = useState('');
@@ -92,14 +94,6 @@ export function SearchPalette({ isOpen, onClose, onSelectConversation, filterDir
     return () => clearTimeout(timer);
   }, [isOpen]);
 
-  // Snapshot conversations only when the query or filter changes — not on every
-  // streaming chunk. The `conversations` Map reference updates on every streamed
-  // text_delta, which would re-run the full-text scan at ~60fps during streaming.
-  const conversationsSnapshot = useRef(conversations);
-  useEffect(() => {
-    conversationsSnapshot.current = conversations;
-  }, [debouncedQuery, filterDirectory]); // eslint-disable-line react-hooks/exhaustive-deps
-
   const results: SearchResult[] = useMemo(() => {
     const trimmed = debouncedQuery.trim();
     if (trimmed.length < 2) return [];
@@ -107,7 +101,7 @@ export function SearchPalette({ isOpen, onClose, onSelectConversation, filterDir
     const lowerQuery = trimmed.toLowerCase();
     const matches: SearchResult[] = [];
 
-    for (const conv of conversationsSnapshot.current.values()) {
+    for (const conv of allConversations) {
       if (filterDirectory && !conv.workingDirectory.startsWith(filterDirectory)) continue;
       for (let i = 0; i < conv.messages.length; i++) {
         const msg = conv.messages[i];
@@ -126,7 +120,7 @@ export function SearchPalette({ isOpen, onClose, onSelectConversation, filterDir
     }
 
     return matches;
-  }, [debouncedQuery, filterDirectory]);
+  }, [allConversations, debouncedQuery, filterDirectory]);
 
   // Reset selection when results change
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset on results length change

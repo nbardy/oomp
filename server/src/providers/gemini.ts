@@ -26,7 +26,7 @@ const geminiProvider: Provider = {
 
   listModels(): ModelInfo[] {
     return [
-      { id: 'gemini-3-pro-preview', displayName: 'Gemini 3 Pro Preview', isDefault: true },
+      { id: 'gemini-3.1-pro-preview', displayName: 'Gemini 3.1 Pro Preview', isDefault: true },
       { id: 'gemini-2.5-pro', displayName: 'Gemini 2.5 Pro', isDefault: false },
       { id: 'gemini-2.5-flash', displayName: 'Gemini 2.5 Flash', isDefault: false },
       { id: 'gemini-2.0-flash', displayName: 'Gemini 2.0 Flash', isDefault: false },

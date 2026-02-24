@@ -51,6 +51,12 @@ export function useSwarmRuntimeSnapshots(
     const fetchRuntimeSnapshots = async () => {
       const entries = await Promise.all(
         normalizedProjectRoots.map(async (projectRoot) => {
+          // Server requires an absolute path. Skip relative paths (e.g. Gemini
+          // sessions whose .project_root file is missing — workingDirectory
+          // falls back to a directory basename, not an absolute path).
+          if (!projectRoot.startsWith('/')) {
+            return { projectRoot, snapshot: makeUnavailable('No project root available') };
+          }
           try {
             const response = await fetch(
               `/api/swarm-runtime?dir=${encodeURIComponent(projectRoot)}`,

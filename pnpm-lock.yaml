@@ -32,6 +32,15 @@ importers:
       highlight.js:
         specifier: ^11.11.1
         version: 11.11.1
+      immer:
+        specifier: ^11.1.4
+        version: 11.1.4
+      jotai:
+        specifier: ^2.18.0
+        version: 2.18.0(@babel/core@7.28.6)(@babel/template@7.28.6)(@types/react@19.2.10)(react@19.2.4)
+      jotai-family:
+        specifier: ^1.0.1
+        version: 1.0.1(jotai@2.18.0(@babel/core@7.28.6)(@babel/template@7.28.6)(@types/react@19.2.10)(react@19.2.4))
       react:
         specifier: ^19.2.0
         version: 19.2.4
@@ -55,7 +64,7 @@ importers:
         version: 4.0.1
       zustand:
         specifier: ^5.0.10
-        version: 5.0.10(@types/react@19.2.10)(react@19.2.4)
+        version: 5.0.10(@types/react@19.2.10)(immer@11.1.4)(react@19.2.4)
     devDependencies:
       '@types/mdast':
         specifier: ^4.0.4
@@ -1015,6 +1024,9 @@ packages:
     resolution: {integrity: sha512-v3MXnZAcvnywkTUEZomIActle7RXXeedOR31wwl7VlyoXO4Qi9arvSenNQWne1TcRwhCL1HwLI21bEqdpj8/rA==}
     engines: {node: '>=0.10.0'}
 
+  immer@11.1.4:
+    resolution: {integrity: sha512-XREFCPo6ksxVzP4E0ekD5aMdf8WMwmdNaz6vuvxgI40UaEiu6q3p8X52aU6GdyvLY3XXX/8R7JOTXStz/nBbRw==}
+
   inherits@2.0.4:
     resolution: {integrity: sha512-k/vGaX4/Yla3WzyMCvTQOXYeIHvqOKtnqBduzTHpzpQZzAskKMhZ2K+EnBiSM9zGSoIFeMpXKxa4dYeZIQqewQ==}
 
@@ -1052,6 +1064,30 @@ packages:
   is-plain-obj@4.1.0:
     resolution: {integrity: sha512-+Pgi+vMuUNkJyExiMBt5IlFoMyKnr5zhJ4Uspz58WOhBF5QoIZkFyNHIbBAtHwzVAgk5RtndVNsDRN61/mmDqg==}
     engines: {node: '>=12'}
+
+  jotai-family@1.0.1:
+    resolution: {integrity: sha512-Zb/79GNDhC/z82R+6qTTpeKW4l4H6ZCApfF5W8G4SH37E4mhbysU7r8DkP0KX94hWvjB/6lt/97nSr3wB+64Zg==}
+    engines: {node: '>=12.20.0'}
+    peerDependencies:
+      jotai: '>=2.9.0'
+
+  jotai@2.18.0:
+    resolution: {integrity: sha512-XI38kGWAvtxAZ+cwHcTgJsd+kJOJGf3OfL4XYaXWZMZ7IIY8e53abpIHvtVn1eAgJ5dlgwlGFnP4psrZ/vZbtA==}
+    engines: {node: '>=12.20.0'}
+    peerDependencies:
+      '@babel/core': '>=7.0.0'
+      '@babel/template': '>=7.0.0'
+      '@types/react': '>=17.0.0'
+      react: '>=17.0.0'
+    peerDependenciesMeta:
+      '@babel/core':
+        optional: true
+      '@babel/template':
+        optional: true
+      '@types/react':
+        optional: true
+      react:
+        optional: true
 
   js-tokens@4.0.0:
     resolution: {integrity: sha512-RdJUflcE3cUzKiMqQgsCu06FPu9UdIJO0beYbPhHN4k6apgJtifcoCtT9bcxOpYBtpD2kCM6Sbzg4CausW/PKQ==}
@@ -2544,6 +2580,8 @@ snapshots:
     dependencies:
       safer-buffer: 2.1.2
 
+  immer@11.1.4: {}
+
   inherits@2.0.4: {}
 
   inline-style-parser@0.2.7: {}
@@ -2570,6 +2608,17 @@ snapshots:
   is-hexadecimal@2.0.1: {}
 
   is-plain-obj@4.1.0: {}
+
+  jotai-family@1.0.1(jotai@2.18.0(@babel/core@7.28.6)(@babel/template@7.28.6)(@types/react@19.2.10)(react@19.2.4)):
+    dependencies:
+      jotai: 2.18.0(@babel/core@7.28.6)(@babel/template@7.28.6)(@types/react@19.2.10)(react@19.2.4)
+
+  jotai@2.18.0(@babel/core@7.28.6)(@babel/template@7.28.6)(@types/react@19.2.10)(react@19.2.4):
+    optionalDependencies:
+      '@babel/core': 7.28.6
+      '@babel/template': 7.28.6
+      '@types/react': 19.2.10
+      react: 19.2.4
 
   js-tokens@4.0.0: {}
 
@@ -3448,9 +3497,10 @@ snapshots:
 
   zod@3.25.76: {}
 
-  zustand@5.0.10(@types/react@19.2.10)(react@19.2.4):
+  zustand@5.0.10(@types/react@19.2.10)(immer@11.1.4)(react@19.2.4):
     optionalDependencies:
       '@types/react': 19.2.10
+      immer: 11.1.4
       react: 19.2.4
 
   zwitch@2.0.4: {}

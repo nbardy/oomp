@@ -3,7 +3,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useFolderFilter } from '../hooks/useFolderFilter';
 import { useUrlFolderSelection } from '../hooks/useUrlFolderSelection';
-import { useConversationStore } from '../stores/conversationStore';
+import { useAtomValue } from 'jotai';
+import { allConversationsAtom } from '../atoms/conversations';
 import { useUIStore } from '../stores/uiStore';
 import { getProjectColor } from '../utils/projectColors';
 import { formatTimeAgo, getLastMessageTime } from '../utils/time';
@@ -38,7 +39,7 @@ interface GalleryProps {
 }
 
 export function Gallery({ filter }: GalleryProps = {}) {
-  const conversations = useConversationStore((s) => s.conversations);
+  const allConversations = useAtomValue(allConversationsAtom);
   const navigate = useNavigate();
 
   // Tick every 30s to keep time-ago displays current
@@ -76,11 +77,11 @@ export function Gallery({ filter }: GalleryProps = {}) {
   const doneSet = useMemo(() => new Set(doneConversations), [doneConversations]);
   const promotedSet = useMemo(() => new Set(promotedWorkers), [promotedWorkers]);
 
-  // Convert Map to array and sort by createdAt (newest first)
+  // Filter to top-level conversations and sort by createdAt (newest first).
+  // allConversations only changes on structural events, not streaming — cheap useMemo.
   const sortedConversations = useMemo(() => {
-    const all = Array.from(conversations.values());
-    const byId = new Set(all.map((conv) => conv.id));
-    const topLevel = all.filter((conv) => {
+    const byId = new Set(allConversations.map((conv) => conv.id));
+    const topLevel = allConversations.filter((conv) => {
       const parentId = conv.parentConversationId;
       return !(parentId && byId.has(parentId));
     });
@@ -90,7 +91,7 @@ export function Gallery({ filter }: GalleryProps = {}) {
       const dateB = new Date(b.createdAt).getTime();
       return dateB - dateA; // Descending order (newest first)
     });
-  }, [conversations]);
+  }, [allConversations]);
 
   // Get folder from conversation
   const getFolder = useCallback((conv: { workingDirectory: string }) => conv.workingDirectory, []);
@@ -222,7 +223,7 @@ export function Gallery({ filter }: GalleryProps = {}) {
   const isDoneView = filter === 'done';
   const isWorkersView = filter === 'workers';
 
-  if (conversations.size === 0) {
+  if (allConversations.length === 0) {
     return (
       <div className="gallery-view">
         <div className="empty-state">

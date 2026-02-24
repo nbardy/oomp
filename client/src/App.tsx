@@ -1,6 +1,10 @@
 import type { ServerMessage } from '@claude-web-view/shared';
+import { Provider, useAtomValue } from 'jotai';
 import { useEffect, useRef } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import { allConversationsAtom, conversationsAtom } from './atoms/conversations';
+import { handleMessage, setSendFn, setWsStatus } from './atoms/actions';
+import { jotaiStore } from './atoms/store';
 import { Chat } from './components/Chat';
 import { ConfigDropdown } from './components/ConfigDropdown';
 import { Gallery } from './components/Gallery';
@@ -10,65 +14,54 @@ import { SwarmAnalytics } from './components/SwarmAnalytics';
 import { SwarmDashboard } from './components/SwarmDashboard';
 import { SwarmDetail } from './components/SwarmDetail';
 import { useWebSocket } from './hooks/useWebSocket';
-import { useConversationStore } from './stores/conversationStore';
 import { initSettings } from './stores/settingsStore';
 import { useUIStore } from './stores/uiStore';
 import './App.css';
 
 /**
- * Connects the useWebSocket hook to the Zustand store.
- * Replaces the old AppProvider wrapper — no component tree needed.
+ * Connects the useWebSocket hook to the Jotai atom store.
+ * handleMessage, setSendFn, setWsStatus are plain functions — no store selectors needed.
  */
 function useWebSocketBridge() {
-  const handleMessage = useConversationStore((s) => s._handleMessage);
-  const setSend = useConversationStore((s) => s._setSend);
-  const setWsStatus = useConversationStore((s) => s._setWsStatus);
-
   const wsUrl = `ws://${window.location.host}/ws`;
   const { send, status } = useWebSocket<ServerMessage>(wsUrl, handleMessage);
 
   useEffect(() => {
-    setSend(send);
-  }, [send, setSend]);
+    setSendFn(send);
+  }, [send]);
+
   useEffect(() => {
     setWsStatus(status);
-  }, [status, setWsStatus]);
+  }, [status]);
 }
 
 /**
  * Restores the last active conversation on initial page load.
- * Lives in AppLayout (mounted once, never remounts) so the ref
- * persists across route changes. Only redirects if the user landed
- * on "/" — not if they're already on a /chat/:id deep link.
- *
- * BUG FIX: Previously lived in GalleryWithRestore which remounted
- * on every Gallery click, causing flash-redirect back to the last chat.
  */
 function useRestoreOnLoad() {
   const navigate = useNavigate();
   const location = useLocation();
-  const conversationsSize = useConversationStore((s) => s.conversations.size);
-  const conversations = useConversationStore((s) => s.conversations);
+  const allConversations = useAtomValue(allConversationsAtom);
   const savedActiveId = useUIStore((s) => s.activeConversationId);
   const didRestore = useRef(false);
 
   useEffect(() => {
-    if (didRestore.current || conversationsSize === 0) return;
+    if (didRestore.current || allConversations.length === 0) return;
     didRestore.current = true;
 
-    // Only restore if user landed on the gallery (root) URL.
-    // If they deep-linked to /chat/:id or /done, respect that.
-    if (location.pathname === '/' && savedActiveId && conversations.has(savedActiveId)) {
-      navigate(`/chat/${savedActiveId}`, { replace: true });
+    if (location.pathname === '/' && savedActiveId) {
+      const conversations = jotaiStore.get(conversationsAtom);
+      if (conversations.has(savedActiveId)) {
+        navigate(`/chat/${savedActiveId}`, { replace: true });
+      }
     }
-  }, [conversationsSize, conversations, navigate, savedActiveId, location.pathname]);
+  }, [allConversations.length, navigate, savedActiveId, location.pathname]);
 }
 
 function AppLayout() {
   useWebSocketBridge();
   useRestoreOnLoad();
 
-  // Initialize settings on mount — loads from server and applies saved palette
   useEffect(() => {
     initSettings().catch(console.error);
   }, []);
@@ -96,12 +89,14 @@ function AppLayout() {
 
 function App() {
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/robot" element={<RobotLoader />} />
-        <Route path="/*" element={<AppLayout />} />
-      </Routes>
-    </BrowserRouter>
+    <Provider store={jotaiStore}>
+      <BrowserRouter>
+        <Routes>
+          <Route path="/robot" element={<RobotLoader />} />
+          <Route path="/*" element={<AppLayout />} />
+        </Routes>
+      </BrowserRouter>
+    </Provider>
   );
 }
 

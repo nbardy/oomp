@@ -1,18 +1,31 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useShallow } from 'zustand/react/shallow';
+import { useAtomValue } from 'jotai';
 // Solarized Dark theme for syntax highlighting - matches app aesthetic
 import 'highlight.js/styles/base16/solarized-dark.css';
 import type {
   ModelId,
   ModelInfo,
   Provider,
-  Conversation as SharedConversation,
 } from '@claude-web-view/shared';
 import { useDropzone } from 'react-dropzone';
 import { useSavedPrompts } from '../hooks/useSavedPrompts';
-import { useConversationStore } from '../stores/conversationStore';
-import type { QueuedMessage } from '../stores/conversationStore';
+import {
+  cancelQueuedMessage,
+  clearQueue,
+  interruptAndSend,
+  queueMessage,
+  setActiveConversationId,
+  setModel,
+  setProvider,
+} from '../atoms/actions';
+import type { QueuedMessage } from '../atoms/actions';
+import {
+  childConversationsAtomFamily,
+  conversationAtomFamily,
+  conversationCountAtom,
+  streamingAtomFamily,
+} from '../atoms/conversations';
 import { DRAFT_KEY_PREFIX, useUIStore } from '../stores/uiStore';
 import { buildUnifiedSubAgents } from '../utils/subAgents';
 import { formatTimeAgo } from '../utils/time';
@@ -25,7 +38,6 @@ import './Chat.css';
 
 // Stable reference for empty queue — avoids new [] on every render triggering re-renders
 const EMPTY_QUEUE: QueuedMessage[] = [];
-const EMPTY_CHILD_CONVERSATIONS: SharedConversation[] = [];
 
 // Draft persistence: debounce delay for saving textarea content to localStorage
 const DRAFT_SAVE_DELAY_MS = 500;
@@ -39,11 +51,6 @@ interface PendingFile {
 }
 
 const EMPTY_PENDING: PendingFile[] = [];
-
-// =============================================================================
-// Memoized Message and Markdown components moved to VirtualizedMessageList.tsx
-// See that file for the MemoizedMessage component and markdownComponents.
-// =============================================================================
 
 /**
  * Returns a live-updating "time ago" string for a Date.
@@ -66,41 +73,12 @@ export function Chat() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
 
-  // Select active conversation + only its linked child sessions needed for
-  // unified sub-agent rendering (avoids subscribing to all conversations).
-  const conversation = useConversationStore((s) => (id ? (s.conversations.get(id) ?? null) : null));
-  // Live streaming text — kept separate from conversations so Sidebar doesn't re-render at 60Hz.
-  // Merged with conversation.messages at render time (see conversationMessages below).
-  const streamingText = useConversationStore((s) => (id ? (s.streamingContent.get(id) ?? '') : ''));
-  const childSessionConversations = useConversationStore(
-    useShallow((s) => {
-      if (!id) return EMPTY_CHILD_CONVERSATIONS;
-      const children: SharedConversation[] = [];
-      for (const candidate of s.conversations.values()) {
-        if (candidate.parentConversationId === id) {
-          children.push(candidate);
-        }
-      }
-      children.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
-      return children;
-    })
-  );
-  const conversationCount = useConversationStore((s) => s.conversations.size);
-  const queue = useConversationStore((s) => {
-    if (!id) return EMPTY_QUEUE;
-    const conv = s.conversations.get(id);
-    return conv?.queue?.length ? conv.queue : EMPTY_QUEUE;
-  });
-
-  // Actions are stable function references — never trigger re-renders
-  const setActiveConversationId = useConversationStore((s) => s.setActiveConversationId);
-  const queueMessage = useConversationStore((s) => s.queueMessage);
-  const interruptAndSend = useConversationStore((s) => s.interruptAndSend);
-  const cancelQueuedMessage = useConversationStore((s) => s.cancelQueuedMessage);
-  const clearQueue = useConversationStore((s) => s.clearQueue);
-  const setProvider = useConversationStore((s) => s.setProvider);
-
-  const setModel = useConversationStore((s) => s.setModel);
+  // Per-ID atoms — only re-render when THIS conversation changes, not others
+  const conversation = useAtomValue(conversationAtomFamily(id ?? ''));
+  const streamingText = useAtomValue(streamingAtomFamily(id ?? ''));
+  const childSessionConversations = useAtomValue(childConversationsAtomFamily(id ?? ''));
+  const conversationCount = useAtomValue(conversationCountAtom);
+  const queue = conversation?.queue?.length ? conversation.queue : EMPTY_QUEUE;
 
   // Model picker: fetch available models for the conversation's provider
   const provider = conversation?.provider ?? 'claude';
@@ -146,14 +124,9 @@ export function Chat() {
 
   const { savePrompt } = useSavedPrompts();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  // NEW Badge Feature: IntersectionObserver ref to detect when last message is visible.
-  // When 50%+ of last message enters viewport, mark all messages as seen.
-  // See docs/new_badge_feature.md for design rationale.
   const lastMessageRef = useRef<HTMLDivElement>(null);
-  // Debounce timer for draft saves — cleared on each keystroke, fires after DRAFT_SAVE_DELAY_MS
   const draftTimerRef = useRef<ReturnType<typeof setTimeout>>(null);
 
-  // Save draft to localStorage, debounced. Reads directly from DOM (uncontrolled textarea).
   const saveDraft = useCallback(() => {
     if (!id) return;
     const value = textareaRef.current?.value ?? '';
@@ -164,48 +137,27 @@ export function Chat() {
     }
   }, [id]);
 
-  // Restore draft from localStorage when switching conversations.
-  // Runs after the textarea DOM element is mounted and conversation changes.
   useEffect(() => {
     if (!id) return;
     const draft = localStorage.getItem(`${DRAFT_KEY_PREFIX}${id}`);
     const textarea = textareaRef.current;
     if (textarea) {
       textarea.value = draft ?? '';
-      // Trigger auto-grow height calculation
       textarea.style.height = 'auto';
       textarea.style.height = `${Math.min(textarea.scrollHeight, 300)}px`;
       setHasInput((draft ?? '').trim().length > 0);
-      // Focus the textarea so the user can start typing immediately
       textarea.focus();
     }
   }, [id]);
 
-  // PERF: Uncontrolled textarea — text lives in the DOM, not React state.
-  // During streaming, chunks update the conversation object dozens of times per second,
-  // causing Chat to re-render (to show new message content + Markdown re-parse).
-  // A controlled textarea (value={input} + onChange) would pipe every keystroke through
-  // React's render cycle, competing with those chunk re-renders and causing severe input lag.
-  // Instead, we read the value directly from textareaRef.current.value on submit.
-  // Only this boolean syncs to React (for button disabled states) — it flips at most twice
-  // (empty→non-empty, non-empty→empty), not on every keystroke.
   const [hasInput, setHasInput] = useState(false);
-
-  // Prompt palette state
   const [showPalette, setShowPalette] = useState(false);
-
-  // Floating scroll-to-bottom arrow — visible when scrolled up 200px+
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
-
-  // File upload state — pending files with preview URLs, cleared on send
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>(EMPTY_PENDING);
   const [isUploading, setIsUploading] = useState(false);
 
-  // Derive state variables early (before effects and handlers that use them)
   const confirmed = conversation?.confirmed ?? false;
   const isRunning = conversation?.isRunning ?? false;
-  // isStreaming: server-authoritative — assistant is actively producing content.
-  // See state machine docs in shared/src/index.ts.
   const isStreaming = conversation?.isStreaming ?? false;
   const canChangeHarness =
     confirmed &&
@@ -214,11 +166,8 @@ export function Chat() {
     !isRunning &&
     !isStreaming;
 
-  // Ref to track running state for cleanup — closures in useEffect capture stale values,
-  // so we need a ref to read current isRunning when the cleanup function executes.
   const isRunningRef = useRef(isRunning);
   isRunningRef.current = isRunning;
-  // Allow input if confirmed, even if running (messages will queue)
   const canInput = confirmed;
   const availableProviders: Array<{ id: Provider; label: string }> = [
     { id: 'claude', label: 'Claude' },
@@ -226,17 +175,11 @@ export function Chat() {
     { id: 'opencode', label: 'OpenCode' },
   ];
 
-  // Messages will be queued if running or streaming
   const willQueue = confirmed && (isRunning || isStreaming);
-
-  // File upload: send button enabled when there are files even without text
   const hasContent = hasInput || pendingFiles.length > 0;
-
-  // Split queue: "sending" message is current (already visible in chat), only "pending" are truly queued.
   const currentMessage = queue.find((m) => m.status === 'sending') ?? null;
   const pendingQueue = queue.filter((m) => m.status === 'pending');
 
-  // Upload files immediately on drop/select — returns absolute paths from server
   const handleFilesUpload = useCallback(
     async (acceptedFiles: File[]) => {
       if (!id || acceptedFiles.length === 0) return;
@@ -291,7 +234,6 @@ export function Chat() {
     noKeyboard: true,
   });
 
-  // Cleanup object URLs on unmount to prevent memory leaks
   useEffect(() => {
     return () => {
       for (const file of pendingFiles) {
@@ -304,10 +246,6 @@ export function Chat() {
   const markMessagesSeen = useUIStore((s) => s.markMessagesSeen);
 
   useEffect(() => {
-    // Clear any pending draft save from the PREVIOUS conversation before switching.
-    // The old timer captures the old saveDraft closure, which reads textareaRef.current.value.
-    // After id changes, that value belongs to the new conversation — firing it would write
-    // new conversation content under the old conversation's draft key.
     if (draftTimerRef.current) {
       clearTimeout(draftTimerRef.current);
       draftTimerRef.current = null;
@@ -316,26 +254,17 @@ export function Chat() {
       setActiveConversationId(id);
       setUIActiveId(id);
     }
-    // Cleanup when navigating away: clear active ID but do NOT kill the process.
-    // Processes are spawned detached (detached: true, unref()) and designed to
-    // complete independently. Killing on navigation causes the bug where switching
-    // tabs too quickly after sending a message terminates the CLI mid-response.
-    // Users can explicitly stop via the stop button if needed.
     return () => {
       setActiveConversationId(null);
     };
-  }, [id, setActiveConversationId, setUIActiveId]);
+  }, [id, setUIActiveId]);
 
-  // Auto-scroll is now handled by VirtualizedMessageList component
-
-  // If conversation doesn't exist and we have conversations, go to gallery
   useEffect(() => {
     if (id && !conversation && conversationCount > 0) {
       navigate('/');
     }
   }, [id, conversation, conversationCount, navigate]);
 
-  // Ctrl+P listener for prompt palette
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'p') {
@@ -347,28 +276,20 @@ export function Chat() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  // NEW Badge Feature: IntersectionObserver is now handled by VirtualizedMessageList
-  // See VirtualizedMessageList.tsx for implementation details.
-
-  // Scroll state callback from VirtualizedMessageList
   const handleScrollStateChange = useCallback((_isNearBottom: boolean, showButton: boolean) => {
     setShowScrollToBottom(showButton);
   }, []);
 
-  // Ref for VirtualizedMessageList to call scroll-to-bottom
   const scrollToBottomRef = useRef<(() => void) | null>(null);
 
-  // Read textarea value from DOM — never goes through React state
   const getInputValue = () => textareaRef.current?.value ?? '';
 
-  // Clear textarea, reset height, and remove draft from localStorage
   const clearInput = () => {
     if (textareaRef.current) {
       textareaRef.current.value = '';
       textareaRef.current.style.height = 'auto';
     }
     setHasInput(false);
-    // Revoke object URLs to prevent memory leaks, then clear pending files
     for (const file of pendingFiles) {
       if (file.previewUrl) URL.revokeObjectURL(file.previewUrl);
     }
@@ -377,27 +298,20 @@ export function Chat() {
     if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
   };
 
-  // Handle input events directly on the DOM element.
-  // Only flips the hasInput boolean when it actually changes — no re-render per keystroke.
-  // Also debounces draft save to localStorage.
   const handleInput = () => {
     const textarea = textareaRef.current;
     if (!textarea) return;
 
-    // Auto-grow: imperative DOM mutation, no React render
     textarea.style.height = 'auto';
     textarea.style.height = `${Math.min(textarea.scrollHeight, 300)}px`;
 
-    // Only trigger React re-render when the boolean flips
     const has = textarea.value.trim().length > 0;
     if (has !== hasInput) setHasInput(has);
 
-    // Debounced draft save — restart timer on each keystroke
     if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
     draftTimerRef.current = setTimeout(saveDraft, DRAFT_SAVE_DELAY_MS);
   };
 
-  // Handle pasted images from clipboard — extract File objects and process like dropped files
   const handlePaste = async (e: React.ClipboardEvent) => {
     const items = e.clipboardData?.items;
     if (!items) return;
@@ -417,15 +331,7 @@ export function Chat() {
     }
   };
 
-  // NOTE: Auto-send logic is handled in the Zustand store (conversationStore).
-  // The store watches for message_complete and status changes to process the queue.
-
   // IMPORTANT: All hooks must be called before any early return.
-  // React requires hooks to be called in the same order every render.
-  // conversation may be null on initial render (before WebSocket init arrives),
-  // then non-null on subsequent renders — varying hook count would crash.
-  // Only recompute when a NEW message is added (length changes), not when
-  // the streaming message's content grows. Chunks don't change the timestamp.
   const messageCount = conversation?.messages.length ?? 0;
   const lastMessageTime = useMemo(() => {
     if (!conversation || messageCount === 0) return undefined;
@@ -437,8 +343,7 @@ export function Chat() {
   const timeAgo = useTimeAgo(lastMessageTime);
 
   // Merge stable conversation messages with live streaming text for display.
-  // conversation.messages is stable during streaming (not updated per chunk).
-  // streamingText changes per chunk; merging here keeps Sidebar untouched.
+  // conversation.messages is stable during streaming; streamingText changes per chunk.
   const conversationMessages = useMemo(() => {
     if (!conversation) return [];
     if (!streamingText) return conversation.messages;
@@ -449,10 +354,6 @@ export function Chat() {
     return messages;
   }, [conversation?.messages, streamingText]);
 
-  // Wrap messages into groups for VirtualizedMessageList.
-  // Strip swarm debug prefix from first user message display —
-  // the prefix was prepended server-side for the CLI but should not
-  // appear in the chat UI. The SwarmConvoPrefix token shows it instead.
   const messageGroups = useMemo((): MessageGroup[] => {
     if (!conversation) return [];
     const prefix = conversation.swarmDebugPrefix;
@@ -487,7 +388,6 @@ export function Chat() {
 
   const dirDisplay = conversation.workingDirectory.replace(/^\/Users\/[^/]+/, '~');
 
-  // Queue a message — prepends uploaded file paths to content
   const handleQueue = () => {
     const textContent = getInputValue().trim();
     if ((!textContent && pendingFiles.length === 0) || !id || !canInput) return;
@@ -506,7 +406,6 @@ export function Chat() {
     clearInput();
   };
 
-  // Interrupt: kill running job, send wrapped message with user's adjustment
   const handleInterrupt = () => {
     const textContent = getInputValue().trim();
     if ((!textContent && pendingFiles.length === 0) || !id || !confirmed) return;
@@ -527,24 +426,14 @@ export function Chat() {
 
   const handleSend = handleQueue;
 
-  // Remove a message from the queue by ID
   const handleRemoveFromQueue = (messageId: string) => {
-    if (id) {
-      cancelQueuedMessage(id, messageId);
-    }
+    if (id) cancelQueuedMessage(id, messageId);
   };
 
-  // Clear all queued messages
   const handleClearQueue = () => {
-    if (id) {
-      clearQueue(id);
-    }
+    if (id) clearQueue(id);
   };
 
-  // KEY BINDINGS:
-  // Enter (not running) = send immediately
-  // Enter (running)     = interrupt running job + send adjusted prompt
-  // Tab                 = queue message (waits for current job to finish)
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Tab' && !e.shiftKey && hasContent && canInput) {
       e.preventDefault();
@@ -555,10 +444,8 @@ export function Chat() {
     if (e.key === 'Enter' && !e.shiftKey && hasContent && confirmed) {
       e.preventDefault();
       if (willQueue) {
-        // Running — interrupt and send adjusted prompt
         handleInterrupt();
       } else {
-        // Idle — send normally
         handleQueue();
       }
     }
@@ -566,9 +453,7 @@ export function Chat() {
 
   const handleSavePrompt = () => {
     const content = getInputValue().trim();
-    if (content) {
-      savePrompt(content);
-    }
+    if (content) savePrompt(content);
   };
 
   return (
@@ -604,19 +489,19 @@ export function Chat() {
               </button>
               {providerPickerOpen && (
                 <div className="provider-picker-menu">
-                  {availableProviders.map((provider) => (
+                  {availableProviders.map((p) => (
                     <button
-                      key={provider.id}
+                      key={p.id}
                       type="button"
                       className={`provider-picker-option ${
-                        provider.id === conversation.provider ? 'selected' : ''
+                        p.id === conversation.provider ? 'selected' : ''
                       }`}
                       onClick={() => {
-                        setProvider(conversation.id, provider.id);
+                        setProvider(conversation.id, p.id);
                         setProviderPickerOpen(false);
                       }}
                     >
-                      {provider.label}
+                      {p.label}
                     </button>
                   ))}
                 </div>
@@ -695,7 +580,6 @@ export function Chat() {
         </div>
       </div>
 
-      {/* Unified Sub-Agent Panel: provider Task-tool subagents + linked child sessions */}
       {unifiedSubAgents.length > 0 && <SubAgentPanel subAgents={unifiedSubAgents} />}
 
       {conversation.messages.length === 0 ? (
@@ -747,7 +631,6 @@ export function Chat() {
       )}
 
       <div className="input-container">
-        {/* Current message indicator — the "sending" message is already in chat, just label it */}
         {currentMessage && (
           <div className="current-message-indicator">
             <span className="current-message-label">Current message</span>
@@ -755,7 +638,6 @@ export function Chat() {
           </div>
         )}
 
-        {/* Queued messages display — only pending messages, not the current one */}
         {pendingQueue.length > 0 && (
           <div className="queued-messages">
             <div className="queued-messages-header">

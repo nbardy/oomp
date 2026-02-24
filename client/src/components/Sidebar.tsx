@@ -1,8 +1,11 @@
 import type { Conversation, ModelId, ModelInfo, Provider } from '@claude-web-view/shared';
+import { useAtomValue } from 'jotai';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useSwarmRuntimeSnapshots } from '../hooks/useSwarmRuntimeSnapshots';
-import { useConversationStore } from '../stores/conversationStore';
+import { createConversation } from '../atoms/actions';
+import { activeConversationIdAtom, allConversationsAtom, defaultCwdAtom, wsStatusAtom } from '../atoms/conversations';
+import { jotaiStore } from '../atoms/store';
 import { useUIStore } from '../stores/uiStore';
 import { getProjectColor } from '../utils/projectColors';
 import { getProjectRoot } from '../utils/swarmUtils';
@@ -34,11 +37,10 @@ function timeAgoColor(minutesElapsed: number): string {
 }
 
 export function Sidebar() {
-  const conversations = useConversationStore((s) => s.conversations);
-  const activeConversationId = useConversationStore((s) => s.activeConversationId);
-  const createConversation = useConversationStore((s) => s.createConversation);
-  const defaultCwd = useConversationStore((s) => s.defaultCwd);
-  const wsStatus = useConversationStore((s) => s.wsStatus);
+  const allConversations = useAtomValue(allConversationsAtom);
+  const activeConversationId = useAtomValue(activeConversationIdAtom);
+  const defaultCwd = useAtomValue(defaultCwdAtom);
+  const wsStatus = useAtomValue(wsStatusAtom);
 
   const lastWorkingDirectory = useUIStore((s) => s.lastWorkingDirectory);
   const setLastWorkingDirectory = useUIStore((s) => s.setLastWorkingDirectory);
@@ -60,18 +62,10 @@ export function Sidebar() {
 
   const promotedSet = useMemo(() => new Set(promotedWorkers), [promotedWorkers]);
 
-  // Sort conversations by most recent message (latest first), fallback to createdAt
-  const sortedConversations = useMemo(() => {
-    return Array.from(conversations.values()).sort((a, b) => {
-      const aTime = getLastMessageTime(a.messages)?.getTime() ?? new Date(a.createdAt).getTime();
-      const bTime = getLastMessageTime(b.messages)?.getTime() ?? new Date(b.createdAt).getTime();
-      return bTime - aTime;
-    });
-  }, [conversations]);
-
+  // allConversations is already sorted newest-first by allConversationsAtom
   const workerConversationsByProject = useMemo(() => {
     const map = new Map<string, Conversation[]>();
-    for (const conv of conversations.values()) {
+    for (const conv of allConversations) {
       if (!conv.isWorker || promotedSet.has(conv.id)) continue;
       const projectRoot = getProjectRoot(conv.workingDirectory);
       const existing = map.get(projectRoot);
@@ -82,7 +76,7 @@ export function Sidebar() {
       }
     }
     return map;
-  }, [conversations, promotedSet]);
+  }, [allConversations, promotedSet]);
 
   const workerProjectRoots = useMemo(
     () => Array.from(workerConversationsByProject.keys()),
@@ -92,16 +86,16 @@ export function Sidebar() {
 
   const visibleConversations = useMemo(
     () =>
-      sortedConversations.filter(
+      allConversations.filter(
         (conv) =>
           !doneConversations.includes(conv.id) &&
           // Hide workers unless promoted to main view
           !(conv.isWorker && !promotedSet.has(conv.id))
       ),
-    [sortedConversations, doneConversations, promotedSet]
+    [allConversations, doneConversations, promotedSet]
   );
 
-  const conversationIds = useMemo(() => new Set(conversations.keys()), [conversations]);
+  const conversationIds = useMemo(() => new Set(allConversations.map((c) => c.id)), [allConversations]);
 
   const topLevelConversations = useMemo(
     () =>
@@ -177,11 +171,11 @@ export function Sidebar() {
   // Deduplicated working directories from all conversations — fed to PathAutocomplete for fuzzy matching
   const recentDirectories = useMemo(() => {
     const dirs = new Set<string>();
-    for (const conv of conversations.values()) {
+    for (const conv of allConversations) {
       dirs.add(conv.workingDirectory);
     }
     return Array.from(dirs);
-  }, [conversations]);
+  }, [allConversations]);
 
   const [showSearch, setShowSearch] = useState(false);
   const [searchFilterDir, setSearchFilterDir] = useState<string | undefined>(undefined);
@@ -209,12 +203,12 @@ export function Sidebar() {
   const handleNewConversation = useCallback(() => {
     // Default to the most recently active conversation's working directory,
     // then uiStore fallback, then server cwd.
-    const latestConv = sortedConversations[0];
+    const latestConv = allConversations[0];
     const lastDir = latestConv?.workingDirectory ?? lastWorkingDirectory ?? defaultCwd ?? '/';
     setDirectory(lastDir);
     setHasPendingDefault(true);
     setShowPicker(true);
-  }, [sortedConversations, lastWorkingDirectory, defaultCwd]);
+  }, [allConversations, lastWorkingDirectory, defaultCwd]);
 
   // Shift+Space global shortcut to open "New Conversation" dialog.
   // Skipped when focus is in an input/textarea so it doesn't hijack typing.
@@ -252,7 +246,7 @@ export function Sidebar() {
       setShowPicker(false);
       // createConversation inserts the stub synchronously and sets activeConversationId.
       // Read it from the store to navigate immediately — no pendingNav dance needed.
-      const newId = useConversationStore.getState().activeConversationId;
+      const newId = jotaiStore.get(activeConversationIdAtom);
       if (newId) navigate(`/chat/${newId}`);
     }
   };
@@ -589,7 +583,7 @@ export function Sidebar() {
                           onClick={(e) => {
                             e.stopPropagation();
                             createConversation(group.directory, provider, model);
-                            const newId = useConversationStore.getState().activeConversationId;
+                            const newId = jotaiStore.get(activeConversationIdAtom);
                             if (newId) navigate(`/chat/${newId}`);
                           }}
                         >
