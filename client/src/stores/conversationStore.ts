@@ -335,7 +335,11 @@ This final message was added as an interruption: "${content}"`;
             `[WS] init conv ${conv.id.substring(0, 8)}: ${conv.messages.length} messages`
           );
         });
-        const convMap = new Map<string, Conversation>();
+        // Merge into existing Map instead of replacing wholesale.
+        // With progressive loading, conversations_updated batches may arrive before
+        // init (race between the WS init microtask and broadcastToAll in onProgress).
+        // Merging preserves any conversations already received via those early batches.
+        const convMap = new Map(get().conversations);
         data.conversations.forEach((conv) => convMap.set(conv.id, conv));
 
         // Reconcile pending conversations from localStorage.
@@ -518,12 +522,17 @@ This final message was added as an interruption: "${content}"`;
         // change (messages added/removed). Mark all messages as seen to avoid false
         // "NEW" badges. This is conservative — better to miss a badge than show incorrect.
         // See docs/new_badge_feature.md, section "Edge Cases Handled #5".
-        const markMessagesSeen = useUIStore.getState().markMessagesSeen;
-        for (const conv of data.conversations) {
-          if (conv.messages.length > 0) {
-            markMessagesSeen(conv.id, conv.messages.length - 1);
+        // Batched into a single Zustand update to avoid 50+ set() calls per batch
+        // during progressive loading (each would spread + notify subscribers).
+        useUIStore.setState((s) => {
+          const updates: Record<string, number> = {};
+          for (const conv of data.conversations) {
+            if (conv.messages.length > 0) {
+              updates[conv.id] = conv.messages.length - 1;
+            }
           }
-        }
+          return { lastSeenMessageIndex: { ...s.lastSeenMessageIndex, ...updates } };
+        });
         break;
       }
 

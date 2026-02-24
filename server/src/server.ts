@@ -55,9 +55,9 @@ const EXTERNAL_GRACE_MS = 30_000; // 30s grace period before marking idle
 // Prevents the file poller from importing an orphaned JSONL as a duplicate conversation.
 const knownSessionIds = new Set<string>();
 
-// Track initial load completion state.
-// Resolves when loadExistingConversations() finishes. WebSocket handlers await this
-// before sending `init` to ensure clients get all conversations, not an empty list.
+// Track initial load readiness. Resolved immediately at startup so WebSocket
+// handlers can send init right away. Conversations stream in progressively
+// via conversations_updated as batches are parsed from disk.
 let initialLoadComplete: Promise<void>;
 let resolveInitialLoad: () => void;
 // Initialize the promise (resolved by startServer after loadExistingConversations)
@@ -94,12 +94,15 @@ type BroadcastData = ServerMessage | ChunkData | MessageCompleteData | MessageDa
 // =============================================================================
 
 /**
- * Broadcast data to all connected WebSocket clients
+ * Broadcast data to all connected WebSocket clients.
+ * Serializes once and sends the same string to all — avoids redundant JSON.stringify
+ * calls per client (matters during progressive load: 30 batches × N tabs).
  */
 function broadcastToAll(data: BroadcastData): void {
+  const payload = JSON.stringify(data);
   wss.clients.forEach((client) => {
     if (client.readyState === WebSocket.OPEN) {
-      client.send(JSON.stringify(data));
+      client.send(payload);
     }
   });
 }
@@ -946,11 +949,10 @@ type ClientMessageData =
 wss.on('connection', (ws: WebSocket) => {
   console.log('New WebSocket connection');
 
-  // Wait for initial load to complete before sending init with conversations.
-  // This prevents race condition where clients get empty conversations array
-  // because JSONL loading (1500+ files, ~5s) hasn't finished yet.
-  // The await is safe because initialLoadComplete is a cached Promise that
-  // resolves immediately once loading is done (subsequent connections don't wait).
+  // Wait for initialLoadComplete (resolves immediately at startup).
+  // Clients get init with whatever conversations are loaded so far — remaining
+  // conversations stream in via conversations_updated as batches are parsed.
+  // Late-connecting clients get more in init; early ones get progressive updates.
   (async () => {
     await initialLoadComplete;
 
@@ -3260,39 +3262,80 @@ function killProcessOnPort(port: number): boolean {
 }
 
 /**
+ * Hydrate a server-side Conversation instance from shared ConversationData.
+ * Used by both initial load (progressive batches) and file polling (new sessions).
+ */
+function hydrateConversation(convData: ConversationData): Conversation {
+  const sessionId = convData.id;
+  const conversation = new Conversation(
+    sessionId,
+    convData.workingDirectory,
+    convData.provider,
+    sessionId, // existingSessionId - marks session as started
+    undefined, // model
+    convData.isWorker, // oompa worker flag from JSONL detection
+    convData.swarmId ?? null,
+    convData.workerId ?? null,
+    convData.workerRole ?? null,
+    resolveParentConversationId(convData.parentConversationId ?? null),
+    convData.modelName ?? null
+  );
+  conversation.messages = convData.messages;
+  conversation.createdAt = convData.createdAt;
+  conversation.subAgents = convData.subAgents;
+  return conversation;
+}
+
+/**
  * Load existing conversations from persisted Claude/Codex/OpenCode files.
- * Called on server startup to hydrate the in-memory Map
+ * Called on server startup to hydrate the in-memory Map.
+ *
+ * Progressive loading: files are sorted by mtime descending (most recent first)
+ * and broadcast to connected clients in batches as they're parsed. This lets the
+ * UI stream in conversations instead of blocking until all 1500+ files are loaded.
  */
 async function loadExistingConversations(): Promise<void> {
   console.log('Loading conversations from persisted session files...');
 
   try {
-    const { conversations: loaded, mtimes } = await loadAllConversations();
+    const { mtimes } = await loadAllConversations((batch, progress) => {
+      // Hydrate each batch into server-side Conversation instances
+      const broadcastBatch: ConversationData[] = [];
+      for (const convData of batch) {
+        const conversation = hydrateConversation(convData);
+        conversations.set(convData.id, conversation);
+        broadcastBatch.push(conversation.toJSON());
+      }
+
+      // Stream batch to all connected clients (most recent conversations arrive first)
+      if (broadcastBatch.length > 0) {
+        broadcastToAll({
+          type: 'conversations_updated',
+          conversations: broadcastBatch,
+        });
+      }
+
+      console.log(`Loaded ${progress.loaded}/${progress.total} files (${conversations.size} conversations)...`);
+    });
+
     fileMtimes = mtimes;
 
-    for (const [sessionId, convData] of loaded) {
-      // Create a Conversation instance from the loaded data
-      // Use sessionId as both id and sessionId (they're the same for loaded sessions)
-      const conversation = new Conversation(
-        sessionId,
-        convData.workingDirectory,
-        convData.provider,
-        sessionId, // existingSessionId - marks session as started
-        undefined, // model
-        convData.isWorker, // oompa worker flag from JSONL detection
-        convData.swarmId ?? null,
-        convData.workerId ?? null,
-        convData.workerRole ?? null,
-        resolveParentConversationId(convData.parentConversationId ?? null),
-        convData.modelName ?? null
-      );
-
-      // Copy over the loaded data
-      conversation.messages = convData.messages;
-      conversation.createdAt = convData.createdAt;
-      conversation.subAgents = convData.subAgents;
-
-      conversations.set(sessionId, conversation);
+    // Second pass: re-resolve parentConversationId now that all conversations are loaded.
+    // During progressive loading, child conversations (sub-agent threads) may have been
+    // hydrated before their parent, leaving parentConversationId as an unresolved raw
+    // session ID. Re-resolve and broadcast corrections so clients update sub-agent hierarchy.
+    const reresolvedBatch: ConversationData[] = [];
+    for (const conv of conversations.values()) {
+      if (conv.parentConversationId) {
+        const resolved = resolveParentConversationId(conv.parentConversationId);
+        if (resolved !== conv.parentConversationId) {
+          conv.parentConversationId = resolved;
+          reresolvedBatch.push(conv.toJSON());
+        }
+      }
+    }
+    if (reresolvedBatch.length > 0) {
+      broadcastToAll({ type: 'conversations_updated', conversations: reresolvedBatch });
     }
 
     console.log(`Loaded ${conversations.size} conversations from persisted session files`);
@@ -3499,22 +3542,7 @@ function startFilePolling(): void {
           changedForBroadcast.push(json);
         } else if (!existing && !knownSessionIds.has(sessionId)) {
           // New conversation (not an orphaned JSONL from resetProcess) — create fresh instance
-          const conversation = new Conversation(
-            sessionId,
-            convData.workingDirectory,
-            convData.provider,
-            sessionId,
-            undefined, // model
-            convData.isWorker, // oompa worker flag
-            convData.swarmId ?? null,
-            convData.workerId ?? null,
-            convData.workerRole ?? null,
-            resolveParentConversationId(convData.parentConversationId ?? null),
-            convData.modelName ?? null
-          );
-          conversation.messages = convData.messages;
-          conversation.createdAt = convData.createdAt;
-          conversation.subAgents = convData.subAgents;
+          const conversation = hydrateConversation(convData);
           conversations.set(sessionId, conversation);
           const json = conversation.toJSON();
           if (externallyRunning.has(sessionId)) {
@@ -3575,21 +3603,20 @@ async function startServer(): Promise<void> {
   }
 
   // Start listening FIRST so the Vite proxy can connect immediately.
-  // WebSocket handlers await initialLoadComplete before sending init,
-  // so clients don't receive empty conversations during the loading window.
   server.listen(portNumber, () => {
     console.log(`Server running on http://localhost:${portNumber}`);
   });
 
-  // Load existing conversations after the port is open.
-  // WebSocket handlers await initialLoadComplete, so clients won't receive
-  // init until this completes — no race condition with empty conversations.
-  await loadExistingConversations();
-
-  // Signal that initial load is complete. WebSocket handlers waiting on
-  // initialLoadComplete will now proceed to send init with all conversations.
+  // Unblock WebSocket handlers immediately — clients get an init with whatever
+  // conversations have been loaded so far (initially empty). As loadExistingConversations
+  // parses files in mtime-descending order, it broadcasts batches via conversations_updated
+  // so the UI streams in progressively (most recent first).
   resolveInitialLoad();
-  console.log('Initial load complete, WebSocket handlers unblocked');
+  console.log('WebSocket handlers unblocked, loading conversations progressively...');
+
+  // Load existing conversations — broadcasts batches to connected clients as they parse.
+  await loadExistingConversations();
+  console.log('Initial load complete');
 
   // Start file polling AFTER initial load so mtimes are populated.
   // If poller starts before loadExistingConversations completes, the first poll

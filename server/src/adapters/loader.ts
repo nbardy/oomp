@@ -99,30 +99,27 @@ async function discoverAll(adapters: DiskAdapter[]): Promise<DiscoveredFile[]> {
 /**
  * Process items with bounded concurrency (worker-pool pattern).
  * No external dependencies — just Promise-based throttling.
+ * Does not accumulate results — each item is GC-eligible after its callback completes.
  *
- * @param items - Array of items to process
- * @param concurrency - Max concurrent operations
- * @param fn - Async function to call on each item
- * @returns Array of results in the same order as input
+ * Shared mutable state in `fn` (batchBuffer, counters) is safe because JS is
+ * single-threaded: mutations between awaits run atomically.
  */
-async function mapWithConcurrency<T, R>(
+async function forEachWithConcurrency<T>(
   items: T[],
   concurrency: number,
-  fn: (item: T) => Promise<R>
-): Promise<R[]> {
-  const results: R[] = new Array(items.length);
+  fn: (item: T) => Promise<void>
+): Promise<void> {
   let nextIndex = 0;
 
   async function worker(): Promise<void> {
     while (nextIndex < items.length) {
       const index = nextIndex++;
-      results[index] = await fn(items[index]);
+      await fn(items[index]);
     }
   }
 
   const workers = Array.from({ length: Math.min(concurrency, items.length) }, worker);
   await Promise.all(workers);
-  return results;
 }
 
 // =============================================================================
@@ -175,9 +172,10 @@ async function parseOneFile(file: DiscoveredFile): Promise<ParsedResult> {
  * Phase 1: Discover all file paths + stat for mtime (sorted by mtime descending)
  * Phase 2: Parse files in parallel with bounded concurrency, emitting batches progressively
  *
- * Files are sorted by mtime descending (most recent first), so the onProgress callback
- * receives the most recently used conversations first. This enables the server to
- * broadcast batches to clients incrementally instead of waiting for all files.
+ * Files are sorted by mtime descending (most recent first). With CONCURRENCY > 1,
+ * batch completion order is approximately but not strictly mtime-ordered — a slow-to-parse
+ * recent file may land in a later batch than faster older files. This is fine because
+ * the UI re-sorts by timestamp on every render (Gallery by createdAt, Sidebar by last message).
  *
  * @param onProgress - Optional callback invoked with batches of parsed conversations
  * @returns conversations + mtime index for subsequent polling
@@ -197,16 +195,20 @@ export async function loadAllConversations(
     `Discovered ${files.length} persisted conversation sources in ${discoverTimeMs.toFixed(0)}ms (sorted by mtime), parsing with concurrency=${CONCURRENCY}...`
   );
 
-  // Phase 2: Parse files in parallel with batched progress callbacks
-  const conversations = new Map<string, Conversation>();
+  // Phase 2: Parse files in parallel with batched progress callbacks.
+  // When onProgress is provided, the caller handles placement (e.g. into the server's
+  // conversations Map), so we skip building a redundant conversations Map here —
+  // avoids doubling peak memory by holding two copies of every parsed conversation.
+  const conversations = onProgress ? null : new Map<string, Conversation>();
   const mtimes = new Map<string, number>();
   const parseTimes: number[] = [];
   let batchBuffer: Conversation[] = [];
   let filesProcessed = 0;
+  let conversationCount = 0;
 
   const parseStart = performance.now();
 
-  await mapWithConcurrency(files, CONCURRENCY, async (file) => {
+  await forEachWithConcurrency(files, CONCURRENCY, async (file) => {
     const result = await parseOneFile(file);
 
     parseTimes.push(result.parseTimeMs);
@@ -215,8 +217,9 @@ export async function loadAllConversations(
       mtimes.set(result.filePath, result.mtimeMs);
     }
     if (result.conversation) {
-      conversations.set(result.conversation.id, result.conversation);
+      conversations?.set(result.conversation.id, result.conversation);
       batchBuffer.push(result.conversation);
+      conversationCount++;
     }
 
     filesProcessed++;
@@ -225,8 +228,6 @@ export async function loadAllConversations(
       onProgress(batchBuffer, { loaded: filesProcessed, total: files.length });
       batchBuffer = [];
     }
-
-    return result;
   });
 
   // Emit any remaining conversations in the final batch
@@ -251,10 +252,10 @@ export async function loadAllConversations(
 
   const totalTimeMs = discoverTimeMs + parseTimeMs;
   console.log(
-    `Loaded ${conversations.size} conversations from ${files.length} files in ${totalTimeMs.toFixed(0)}ms (discover: ${discoverTimeMs.toFixed(0)}ms, parse: ${parseTimeMs.toFixed(0)}ms)`
+    `Loaded ${conversationCount} conversations from ${files.length} files in ${totalTimeMs.toFixed(0)}ms (discover: ${discoverTimeMs.toFixed(0)}ms, parse: ${parseTimeMs.toFixed(0)}ms)`
   );
 
-  return { conversations, mtimes };
+  return { conversations: conversations ?? new Map(), mtimes };
 }
 
 // =============================================================================

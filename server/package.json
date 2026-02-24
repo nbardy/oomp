@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@claude-web-view/shared": "workspace:*",
-    "@nbardy/agent-cli": "^0.1.0",
+    "@nbardy/agent-cli": "link:../../agent-cli-tool",
     "express": "^4.18.2",
     "multer": "^2.0.2",
     "uuid": "^13.0.0",
