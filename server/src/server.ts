@@ -290,6 +290,14 @@ class Conversation extends EventEmitter {
 
   /**
    * Send a message by spawning a new CLI process.
+   *
+   * HYBRID SYNC STRATEGY:
+   * 1. STDOUT (Live): Used for real-time UI interactivity ("typewriter" effect).
+   *    CLI agents (Gemini, Codex) only write to disk after the process exits.
+   *    Streaming stdout is mandatory to prevent the UI from appearing frozen.
+   * 2. DISK (Persistence): Used for rehydration and history. The file poller
+   *    ensures that sessions are preserved across server restarts and refreshes.
+   *
    * Claude CLI requires stdin EOF to process input, so we spawn fresh for each message.
    * First message uses --session-id, subsequent messages use --resume.
    */

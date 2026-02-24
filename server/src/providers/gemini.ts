@@ -6,6 +6,8 @@
  * Streaming:
  * - Uses `--output-format stream-json` for real-time stdout streaming.
  * - This provides immediate UI feedback while disk persistence runs in parallel.
+ * - NOTE: Empirical testing confirms Gemini CLI only writes the session JSON
+ *   to disk at the very end of a turn, making stdout streaming mandatory.
  *
  * Session behavior:
  * - Gemini manages sessions by working directory, not by session ID.
