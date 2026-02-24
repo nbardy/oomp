@@ -18,7 +18,6 @@ import { diskAdapters } from './registry';
 import {
   getOpenCodeSessionMtime,
   OPENCODE_PART_DIR,
-  getOpenCodeSessionMetadataIndex,
 } from './registry';
 import {
   extractCodexSessionIdFromFilename,
@@ -283,10 +282,6 @@ export async function pollForChanges(
   const updated = new Map<string, Conversation>();
   const mtimes = new Map(prevMtimes);
 
-  // Rebuild the OpenCode session metadata index once per poll cycle.
-  // New sessions added between polls need their metadata entry to be found.
-  const openCodeSessionIndex = await getOpenCodeSessionMetadataIndex();
-
   for (const adapter of diskAdapters) {
     let paths: string[];
     try {
@@ -296,6 +291,13 @@ export async function pollForChanges(
       continue;
     }
 
+    // For OpenCode, discoverFiles() already rebuilt the session metadata index
+    // (stored on opencodeAdapter._sessionIndex). Reuse it instead of re-fetching.
+    const openCodeSessionIndex: Map<string, string> | null =
+      adapter.provider === 'opencode'
+        ? ((adapter as typeof adapter & { _sessionIndex: Map<string, string> | null })._sessionIndex ?? null)
+        : null;
+
     for (const filePath of paths) {
       try {
         // Compute current mtime — for OpenCode sessions (directories) use
@@ -303,7 +305,7 @@ export async function pollForChanges(
         let currentMtime: number;
         if (adapter.provider === 'opencode') {
           const sessionId = path.basename(filePath);
-          const metadataPath = openCodeSessionIndex.get(sessionId);
+          const metadataPath = openCodeSessionIndex?.get(sessionId);
           currentMtime = await getOpenCodeSessionMtime(filePath, OPENCODE_PART_DIR, metadataPath);
           if (currentMtime <= 0) continue;
         } else {

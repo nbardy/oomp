@@ -380,7 +380,9 @@ class Conversation extends EventEmitter {
 
     this.process.stderr?.on('data', (data: Buffer) => {
       const chunk = data.toString();
-      this._stderrBuffer += chunk;
+      // Cap at 4KB — stderrSnippet only uses the last 1200 chars; unbounded growth
+      // leaks memory for runaway processes that write megabytes to stderr.
+      this._stderrBuffer = (this._stderrBuffer + chunk).slice(-4096);
       console.error(`[${this.id}] stderr:`, chunk);
     });
 
@@ -448,6 +450,9 @@ class Conversation extends EventEmitter {
       this.isStreaming = false;
       this.isRunning = false;
       this.process = null;
+      // Clear pending task tools — message_complete handles the normal path, but
+      // kills/crashes skip it, leaving stale entries that accumulate across runs.
+      this._pendingTaskTools.clear();
       this.broadcastStatus();
       // Dequeue the "sending" message (completed or crashed) and process next.
       // This is the SINGLE code path for dequeue — not split between
@@ -1087,6 +1092,9 @@ wss.on('connection', (ws: WebSocket) => {
           if (convToDelete) {
             convToDelete.stop();
             conversations.delete(data.conversationId);
+            // Evict session IDs so the orphan-detection guard doesn't accumulate forever
+            knownSessionIds.delete(convToDelete.sessionId);
+            knownSessionIds.delete(convToDelete.id);
             ws.send(
               JSON.stringify({
                 type: 'conversation_deleted',

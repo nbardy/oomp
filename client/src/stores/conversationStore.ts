@@ -33,28 +33,26 @@ function flushChunkBuffer(): void {
   const pending = new Map(chunkBuffer);
   chunkBuffer.clear();
 
+  // Flush into streamingContent (NOT conversations) so the Sidebar doesn't
+  // re-render at 60Hz. conversations is only updated on structural events
+  // (message_complete, status, etc.). Chat merges streamingContent at render time.
   useConversationStore.setState((state) => {
-    const conversations = new Map(state.conversations);
+    const streamingContent = new Map(state.streamingContent);
     let changed = false;
 
     for (const [conversationId, bufferedText] of pending) {
-      const conv = conversations.get(conversationId);
+      // Verify a streaming assistant message actually exists to receive this text
+      const conv = state.conversations.get(conversationId);
       if (!conv || conv.messages.length === 0) continue;
-
       const lastMsg = conv.messages[conv.messages.length - 1];
       if (lastMsg.role !== 'assistant') continue;
 
-      // Structural sharing: reuse the same array, only replace the last element
-      const messages = conv.messages.slice();
-      messages[messages.length - 1] = {
-        ...lastMsg,
-        content: lastMsg.content + bufferedText,
-      };
-      conversations.set(conversationId, { ...conv, messages });
+      const existing = streamingContent.get(conversationId) ?? '';
+      streamingContent.set(conversationId, existing + bufferedText);
       changed = true;
     }
 
-    return changed ? { conversations } : state;
+    return changed ? { streamingContent } : state;
   });
 }
 
@@ -112,6 +110,9 @@ function removePendingConversation(id: string): void {
 interface ConversationStore {
   // State
   conversations: Map<string, Conversation>;
+  // Streaming text accumulates here (not in conversations) so the Sidebar never
+  // re-renders during chunk streaming. Flushed into conversations on stream end.
+  streamingContent: Map<string, string>;
   activeConversationId: string | null;
   wsStatus: 'connecting' | 'connected' | 'disconnected';
   defaultCwd: string;
@@ -154,6 +155,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
   // State
   // ---------------------------------------------------------------------------
   conversations: new Map(),
+  streamingContent: new Map(),
   activeConversationId: null,
   wsStatus: 'connecting',
   defaultCwd: '',
@@ -385,7 +387,21 @@ This final message was added as an interruption: "${content}"`;
           }
         }
 
-        set({ defaultCwd: data.defaultCwd, conversations: convMap });
+        // Clear stale streaming state from any interrupted session before this reconnect.
+        // If a stream was in progress when the WS disconnected, chunkBuffer and
+        // streamingContent may hold partial text that the server has already finalized.
+        // The authoritative final state arrives in convMap, so stale fragments must go.
+        chunkBuffer.clear();
+
+        set((state) => {
+          // Drop streamingContent for conversations the server says are not streaming.
+          const streamingContent = new Map(state.streamingContent);
+          for (const [id] of streamingContent) {
+            const conv = convMap.get(id);
+            if (!conv || !conv.isStreaming) streamingContent.delete(id);
+          }
+          return { defaultCwd: data.defaultCwd, conversations: convMap, streamingContent };
+        });
         // Queue state is included in each conversation's `queue` field from the init payload.
         // No client-side reconstruction needed — the server is the source of truth.
         break;
@@ -420,6 +436,11 @@ This final message was added as an interruption: "${content}"`;
         // Clean up localStorage: pending stub + draft
         removePendingConversation(data.conversationId);
         localStorage.removeItem(`${DRAFT_KEY_PREFIX}${data.conversationId}`);
+        // Evict from lastSeenMessageIndex — otherwise it grows forever as conversations are deleted
+        useUIStore.setState((s) => {
+          const { [data.conversationId]: _, ...rest } = s.lastSeenMessageIndex;
+          return { lastSeenMessageIndex: rest };
+        });
         break;
 
       case 'message': {
@@ -481,14 +502,32 @@ This final message was added as an interruption: "${content}"`;
         set((state) => {
           const conversations = new Map(state.conversations);
           const conv = conversations.get(data.conversationId);
-          if (conv) {
-            conversations.set(data.conversationId, {
-              ...conv,
-              isRunning: data.isRunning,
-              isStreaming: data.isStreaming,
-            });
+          if (!conv) return state;
+
+          let updatedConv = { ...conv, isRunning: data.isRunning, isStreaming: data.isStreaming };
+          let streamingContent = state.streamingContent;
+
+          // When streaming stops, flush accumulated chunk text into conversations.
+          // This covers both clean completion (message_complete → status) and abrupt
+          // kills (SIGTERM). Without this flush the text would be lost.
+          if (!data.isStreaming && streamingContent.has(data.conversationId)) {
+            const accumulatedText = streamingContent.get(data.conversationId)!;
+            streamingContent = new Map(streamingContent);
+            streamingContent.delete(data.conversationId);
+
+            const lastMsg = updatedConv.messages[updatedConv.messages.length - 1];
+            if (lastMsg?.role === 'assistant') {
+              const messages = updatedConv.messages.slice();
+              messages[messages.length - 1] = {
+                ...lastMsg,
+                content: lastMsg.content + accumulatedText,
+              };
+              updatedConv = { ...updatedConv, messages };
+            }
           }
-          return { conversations };
+
+          conversations.set(data.conversationId, updatedConv);
+          return { conversations, streamingContent };
         });
         break;
 
