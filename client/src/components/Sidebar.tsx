@@ -22,11 +22,19 @@ import { SearchPalette } from './SearchPalette';
 import './Sidebar.css';
 
 const RECENT_CUTOFF_MS = 7 * 24 * 60 * 60 * 1000;
+const ROOT_PLACEHOLDER = '/';
 
 interface FolderGroup {
   directory: string;
   conversations: Conversation[];
   lastMessageTime: number;
+}
+
+function normalizeFolderDirectory(path: string): string {
+  const trimmed = path.trim();
+  if (!trimmed) return ROOT_PLACEHOLDER;
+  const withoutTrailingSlashes = trimmed.replace(/\/+$/, '');
+  return withoutTrailingSlashes || ROOT_PLACEHOLDER;
 }
 
 /**
@@ -127,13 +135,14 @@ export function Sidebar() {
     for (const conv of topLevelConversations) {
       const lastTime = getConversationLastActivity(conv);
       const isRecent = now - lastTime.getTime() < RECENT_CUTOFF_MS;
+      const folderDirectory = normalizeFolderDirectory(conv.workingDirectory);
 
       if (isRecent) {
-        const existing = recentMap.get(conv.workingDirectory);
+        const existing = recentMap.get(folderDirectory);
         if (existing) {
           existing.push(conv);
         } else {
-          recentMap.set(conv.workingDirectory, [conv]);
+          recentMap.set(folderDirectory, [conv]);
         }
       } else {
         older.push(conv);
@@ -179,7 +188,7 @@ export function Sidebar() {
   const recentDirectories = useMemo(() => {
     const dirs = new Set<string>();
     for (const conv of allConversations) {
-      dirs.add(conv.workingDirectory);
+      dirs.add(normalizeFolderDirectory(conv.workingDirectory));
     }
     return Array.from(dirs);
   }, [allConversations]);
@@ -633,9 +642,10 @@ function ConversationItem({
   onSelect: (id: string) => void;
   onDone: (id: string, e: React.MouseEvent) => void;
 }) {
-  const projectColor = getProjectColor(conv.workingDirectory);
-  const dirDisplay = conv.workingDirectory.replace(/^\/Users\/[^/]+/, '~');
-  const folderName = conv.workingDirectory.split('/').filter(Boolean).pop() ?? dirDisplay;
+  const workingDirectory = normalizeFolderDirectory(conv.workingDirectory);
+  const projectColor = getProjectColor(workingDirectory);
+  const dirDisplay = workingDirectory.replace(/^\/Users\/[^/]+/, '~');
+  const folderName = workingDirectory.split('/').filter(Boolean).pop() ?? dirDisplay;
   const preview =
     conv.messages.length > 0
       ? conv.messages[conv.messages.length - 1].content.substring(0, 120)

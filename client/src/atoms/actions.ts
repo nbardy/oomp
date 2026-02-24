@@ -85,6 +85,13 @@ interface PendingConversation {
   createdAt: string;
 }
 
+function normalizeWorkingDirectory(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) return trimmed;
+  const withoutTrailingSlashes = trimmed.replace(/\/+$/, '');
+  return withoutTrailingSlashes || '/';
+}
+
 function loadPendingConversations(): PendingConversation[] {
   const raw = localStorage.getItem(PENDING_CONVERSATIONS_KEY);
   if (!raw) return [];
@@ -141,6 +148,7 @@ export function createConversation(
   swarmDebugPrefix?: string
 ): string {
   const id = crypto.randomUUID();
+  const normalizedWorkingDirectory = normalizeWorkingDirectory(workingDirectory);
 
   const stub: Conversation = {
     id,
@@ -149,7 +157,7 @@ export function createConversation(
     isStreaming: false,
     confirmed: false,
     createdAt: new Date(),
-    workingDirectory,
+    workingDirectory: normalizedWorkingDirectory,
     provider,
     model,
     subAgents: [],
@@ -173,12 +181,19 @@ export function createConversation(
 
   savePendingConversation({
     id,
-    workingDirectory,
+    workingDirectory: normalizedWorkingDirectory,
     provider,
     model,
     createdAt: stub.createdAt.toISOString(),
   });
-  send({ type: 'new_conversation', id, workingDirectory, provider, model, swarmDebugPrefix });
+  send({
+    type: 'new_conversation',
+    id,
+    workingDirectory: normalizedWorkingDirectory,
+    provider,
+    model,
+    swarmDebugPrefix,
+  });
 
   return id;
 }
@@ -285,7 +300,7 @@ export function handleMessage(data: ServerMessage): void {
             isStreaming: false,
             confirmed: false,
             createdAt: new Date(pc.createdAt),
-            workingDirectory: pc.workingDirectory,
+            workingDirectory: normalizeWorkingDirectory(pc.workingDirectory),
             provider: pc.provider,
             model: pc.model,
             subAgents: [],
@@ -298,11 +313,12 @@ export function handleMessage(data: ServerMessage): void {
             modelName: null,
           };
           convMap.set(pc.id, stub);
+          const normalizedWorkingDirectory = normalizeWorkingDirectory(pc.workingDirectory);
           setTimeout(() => {
             send({
               type: 'new_conversation',
               id: pc.id,
-              workingDirectory: pc.workingDirectory,
+              workingDirectory: normalizedWorkingDirectory,
               provider: pc.provider,
               model: pc.model,
             });

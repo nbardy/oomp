@@ -52,6 +52,7 @@ const geminiProvider: Provider = {
       sessionId,
       resume,
       bypassPermissions: true, // adds --yolo
+      extraArgs: ['--output-format', 'stream-json'],
     });
 
     return {
