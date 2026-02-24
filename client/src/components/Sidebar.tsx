@@ -1,16 +1,22 @@
+import { PROVIDER_OPTIONS } from '@claude-web-view/shared';
 import type { Conversation, ModelId, ModelInfo, Provider } from '@claude-web-view/shared';
 import { useAtomValue } from 'jotai';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { useSwarmRuntimeSnapshots } from '../hooks/useSwarmRuntimeSnapshots';
 import { createConversation } from '../atoms/actions';
-import { activeConversationIdAtom, allConversationsAtom, defaultCwdAtom, wsStatusAtom } from '../atoms/conversations';
+import {
+  activeConversationIdAtom,
+  allConversationsAtom,
+  defaultCwdAtom,
+  wsStatusAtom,
+} from '../atoms/conversations';
 import { jotaiStore } from '../atoms/store';
+import { useSwarmRuntimeSnapshots } from '../hooks/useSwarmRuntimeSnapshots';
 import { useUIStore } from '../stores/uiStore';
 import { getProjectColor } from '../utils/projectColors';
 import { getProjectRoot } from '../utils/swarmUtils';
 import { getWorkerVisibilitySummary } from '../utils/swarmWorkerVisibility';
-import { formatTimeAgo, getLastMessageTime, getMinutesElapsed } from '../utils/time';
+import { formatTimeAgo, getConversationLastActivity, getMinutesElapsed } from '../utils/time';
 import { PathAutocomplete } from './PathAutocomplete';
 import { SearchPalette } from './SearchPalette';
 import './Sidebar.css';
@@ -95,7 +101,10 @@ export function Sidebar() {
     [allConversations, doneConversations, promotedSet]
   );
 
-  const conversationIds = useMemo(() => new Set(allConversations.map((c) => c.id)), [allConversations]);
+  const conversationIds = useMemo(
+    () => new Set(allConversations.map((c) => c.id)),
+    [allConversations]
+  );
 
   const topLevelConversations = useMemo(
     () =>
@@ -116,8 +125,8 @@ export function Sidebar() {
     const older: Conversation[] = [];
 
     for (const conv of topLevelConversations) {
-      const lastTime = getLastMessageTime(conv.messages);
-      const isRecent = lastTime && now - lastTime.getTime() < RECENT_CUTOFF_MS;
+      const lastTime = getConversationLastActivity(conv);
+      const isRecent = now - lastTime.getTime() < RECENT_CUTOFF_MS;
 
       if (isRecent) {
         const existing = recentMap.get(conv.workingDirectory);
@@ -134,9 +143,7 @@ export function Sidebar() {
     const groups: FolderGroup[] = Array.from(recentMap.entries()).map(([directory, convs]) => ({
       directory,
       conversations: convs,
-      lastMessageTime: Math.max(
-        ...convs.map((c) => getLastMessageTime(c.messages)?.getTime() ?? 0)
-      ),
+      lastMessageTime: Math.max(...convs.map((c) => getConversationLastActivity(c).getTime())),
     }));
     groups.sort((a, b) => b.lastMessageTime - a.lastMessageTime);
 
@@ -386,46 +393,21 @@ export function Sidebar() {
               />
               <label className="new-conv-label">Provider</label>
               <div className="provider-selector">
-                <label className={`provider-option ${provider === 'claude' ? 'selected' : ''}`}>
-                  <input
-                    type="radio"
-                    name="provider"
-                    value="claude"
-                    checked={provider === 'claude'}
-                    onChange={() => setProvider('claude')}
-                  />
-                  Claude
-                </label>
-                <label className={`provider-option ${provider === 'codex' ? 'selected' : ''}`}>
-                  <input
-                    type="radio"
-                    name="provider"
-                    value="codex"
-                    checked={provider === 'codex'}
-                    onChange={() => setProvider('codex')}
-                  />
-                  Codex
-                </label>
-                <label className={`provider-option ${provider === 'opencode' ? 'selected' : ''}`}>
-                  <input
-                    type="radio"
-                    name="provider"
-                    value="opencode"
-                    checked={provider === 'opencode'}
-                    onChange={() => setProvider('opencode')}
-                  />
-                  OpenCode
-                </label>
-                <label className={`provider-option ${provider === 'gemini' ? 'selected' : ''}`}>
-                  <input
-                    type="radio"
-                    name="provider"
-                    value="gemini"
-                    checked={provider === 'gemini'}
-                    onChange={() => setProvider('gemini')}
-                  />
-                  Gemini
-                </label>
+                {PROVIDER_OPTIONS.map((option) => (
+                  <label
+                    className={`provider-option ${provider === option.id ? 'selected' : ''}`}
+                    key={option.id}
+                  >
+                    <input
+                      type="radio"
+                      name="provider"
+                      value={option.id}
+                      checked={provider === option.id}
+                      onChange={() => setProvider(option.id)}
+                    />
+                    {option.label}
+                  </label>
+                ))}
               </div>
               <label className="new-conv-label">Model</label>
               <div className="model-selector">
@@ -659,7 +641,7 @@ function ConversationItem({
       ? conv.messages[conv.messages.length - 1].content.substring(0, 120)
       : 'New conversation';
 
-  const lastTime = getLastMessageTime(conv.messages);
+  const lastTime = getConversationLastActivity(conv);
   const timeAgo = lastTime ? formatTimeAgo(lastTime) : null;
   const timeColor = lastTime ? timeAgoColor(getMinutesElapsed(lastTime)) : undefined;
 

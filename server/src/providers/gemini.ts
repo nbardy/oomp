@@ -1,7 +1,11 @@
 /**
  * Gemini CLI Provider
  *
- * Handles spawning the Google Gemini CLI. Data is read from disk, not stdout.
+ * Handles spawning the Google Gemini CLI.
+ *
+ * Streaming:
+ * - Uses `--output-format stream-json` for real-time stdout streaming.
+ * - This provides immediate UI feedback while disk persistence runs in parallel.
  *
  * Session behavior:
  * - Gemini manages sessions by working directory, not by session ID.
@@ -10,11 +14,10 @@
  *
  * Persistence:
  * - Gemini CLI writes session files to ~/.gemini/tmp/{project}/chats/session-*.json
- * - The server's file poller reads these (see jsonl.ts Gemini adapter).
- * - parseOutput is minimal — stdout is not the primary data path.
+ * - The server's file poller also reads these (see jsonl.ts Gemini adapter).
  *
  * Prompt delivery:
- * - Prompt is read from stdin (server writes content + '\n' then closes).
+ * - Delivered via CLI flag -p (headless mode).
  */
 
 import type { ModelInfo } from '@claude-web-view/shared';
@@ -27,9 +30,9 @@ const geminiProvider: Provider = {
   listModels(): ModelInfo[] {
     return [
       { id: 'gemini-3.1-pro-preview', displayName: 'Gemini 3.1 Pro Preview', isDefault: true },
-      { id: 'gemini-2.5-pro', displayName: 'Gemini 2.5 Pro', isDefault: false },
-      { id: 'gemini-2.5-flash', displayName: 'Gemini 2.5 Flash', isDefault: false },
-      { id: 'gemini-2.0-flash', displayName: 'Gemini 2.0 Flash', isDefault: false },
+      { id: 'gemini-2.5-pro', displayName: 'Gemini 2.5-pro', isDefault: false },
+      { id: 'gemini-2.5-flash', displayName: 'Gemini 2.5-flash', isDefault: false },
+      { id: 'gemini-2.0-flash', displayName: 'Gemini 2.0-flash', isDefault: false },
     ];
   },
 
@@ -41,14 +44,12 @@ const geminiProvider: Provider = {
   ): SpawnConfig {
     // Command building delegated to @nbardy/agent-cli.
     // Gemini resumes by CWD (--resume latest), not by session ID.
-    // Prompt is delivered via stdin — server writes content + '\n' then closes.
-    // No --output-format flag: data comes from disk, not stdout streaming.
-    // -y: YOLO mode — auto-approve all tool confirmations.
+    // harness uses --output-format stream-json by default now.
     const spec = buildCommand('gemini', {
       model: modelId,
       sessionId,
       resume,
-      extraArgs: ['-y'],
+      bypassPermissions: true, // adds --yolo
     });
 
     return {
@@ -58,6 +59,7 @@ const geminiProvider: Provider = {
         cwd: workingDir,
         stdio: ['pipe', 'pipe', 'pipe'],
       },
+      stdout: spec.stdout,
     };
   },
 
@@ -66,14 +68,39 @@ const geminiProvider: Provider = {
       command: 'gemini',
       args: ['-p', prompt, '-y'],
       options: {},
+      stdout: 'text',
     };
   },
 
-  // Gemini data comes from disk polling, not stdout.
-  // parseOutput exists only to satisfy the Provider interface.
-  // The server may still pipe stdout; treat everything as a no-op.
-  parseOutput(_json: unknown): ProviderEvent {
-    return { type: 'message_start' };
+  /**
+   * Parse Gemini CLI --output-format stream-json output.
+   * Format:
+   *   {"type":"init", ...}
+   *   {"type":"message","role":"assistant","content":"...", "delta":true}
+   *   {"type":"result","status":"success", ...}
+   */
+  parseOutput(json: unknown): ProviderEvent {
+    const obj = json as Record<string, unknown>;
+
+    switch (obj.type) {
+      case 'init':
+        return { type: 'message_start' };
+
+      case 'message':
+        if (obj.role === 'assistant' && typeof obj.content === 'string') {
+          return { type: 'text_delta', text: obj.content };
+        }
+        return { type: 'message_start' };
+
+      case 'result':
+        if (obj.status === 'success') {
+          return { type: 'message_complete' };
+        }
+        return { type: 'message_start' };
+
+      default:
+        return { type: 'message_start' };
+    }
   },
 };
 

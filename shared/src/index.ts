@@ -117,6 +117,34 @@ export {
 export const ProviderSchema = z.enum(['claude', 'codex', 'opencode', 'gemini']);
 export type Provider = z.infer<typeof ProviderSchema>;
 
+export interface ProviderMetadata {
+  id: Provider;
+  label: string;
+  shortLabel: string;
+  cssClass: string;
+}
+
+export const PROVIDER_METADATA: Record<Provider, Omit<ProviderMetadata, 'id'>> = {
+  claude: { label: 'Claude', shortLabel: 'C', cssClass: 'claude' },
+  codex: { label: 'Codex', shortLabel: 'X', cssClass: 'codex' },
+  opencode: { label: 'OpenCode', shortLabel: 'O', cssClass: 'opencode' },
+  gemini: { label: 'Gemini', shortLabel: 'G', cssClass: 'gemini' },
+};
+
+export const PROVIDER_OPTIONS: readonly ProviderMetadata[] = [
+  { id: 'claude', ...PROVIDER_METADATA.claude },
+  { id: 'codex', ...PROVIDER_METADATA.codex },
+  { id: 'opencode', ...PROVIDER_METADATA.opencode },
+  { id: 'gemini', ...PROVIDER_METADATA.gemini },
+];
+
+export const PROVIDER_IDS: readonly Provider[] = PROVIDER_OPTIONS.map((provider) => provider.id);
+
+export const getProviderMetadata = (provider: Provider): ProviderMetadata => ({
+  id: provider,
+  ...PROVIDER_METADATA[provider],
+});
+
 // =============================================================================
 // Model Identifiers — per-provider model choices
 //
@@ -136,6 +164,7 @@ export const ClaudeModelSchema = z.enum(['opus', 'sonnet', 'haiku']);
 export type ClaudeModel = z.infer<typeof ClaudeModelSchema>;
 
 export const GeminiModelSchema = z.enum([
+  'gemini-3.1-pro-preview',
   'gemini-3-pro-preview',
   'gemini-2.5-pro',
   'gemini-2.5-flash',

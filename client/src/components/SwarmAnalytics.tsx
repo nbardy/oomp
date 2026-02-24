@@ -4,9 +4,9 @@ import type {
   SwarmRunLog,
   SwarmRunSummary,
 } from '@claude-web-view/shared';
+import { useAtomValue } from 'jotai';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useAtomValue } from 'jotai';
 import { allConversationsAtom } from '../atoms/conversations';
 import { useUIStore } from '../stores/uiStore';
 import { getProjectColor } from '../utils/projectColors';

@@ -32,6 +32,20 @@ export function getLastMessageTime(messages: { timestamp?: Date | string }[]): D
 }
 
 /**
+ * Return the last activity timestamp for a conversation.
+ *
+ * For active conversations with messages, this is the timestamp of the last
+ * message. For brand-new stubs (no messages yet), fall back to `createdAt` so
+ * they still participate in recency sorting/grouping and age labels.
+ */
+export function getConversationLastActivity(conversation: {
+  messages: { timestamp?: Date | string }[];
+  createdAt: Date | string;
+}): Date {
+  return getLastMessageTime(conversation.messages) ?? new Date(conversation.createdAt);
+}
+
+/**
  * Format a duration in milliseconds as a human-readable string.
  * Examples: "30s", "5m", "2h 30m", "1d 4h"
  */

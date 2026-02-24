@@ -11,6 +11,7 @@ const CODEX_MODEL_IDS = new Set([
   'gpt-5.3-codex-spark-xhigh',
 ]);
 const GEMINI_MODEL_IDS = new Set([
+  'gemini-3.1-pro-preview',
   'gemini-3-pro-preview',
   'gemini-2.5-pro',
   'gemini-2.5-flash',
@@ -48,7 +49,7 @@ export function modelValidationHint(provider: ProviderName): string {
     case 'codex':
       return "one of: 'gpt-5.3-codex-{medium,high,xhigh}', 'gpt-5.3-codex-spark', 'gpt-5.3-codex-spark-{medium,high,xhigh}'";
     case 'gemini':
-      return "one of: 'gemini-3-pro-preview', 'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash'";
+      return "one of: 'gemini-3.1-pro-preview', 'gemini-3-pro-preview', 'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash'";
     case 'opencode':
       return "'provider/model' format (e.g. 'opencode/big-pickle')";
     default:

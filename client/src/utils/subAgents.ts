@@ -1,4 +1,5 @@
 import type { Conversation, SubAgent } from '@claude-web-view/shared';
+import { getProviderMetadata } from '@claude-web-view/shared';
 import { getLastMessageTime } from './time';
 
 const OOMPA_TAG_RE = /^\[oompa(?::[^\]]+)?\]\s*/;
@@ -26,14 +27,7 @@ function projectChildConversationToSubAgent(child: Conversation): SubAgent {
   const completedAt = child.isRunning
     ? undefined
     : (getLastMessageTime(child.messages) ?? startedAt);
-  const roleLabel =
-    child.provider === 'codex'
-      ? 'Codex'
-      : child.provider === 'opencode'
-        ? 'OpenCode'
-        : child.provider === 'gemini'
-          ? 'Gemini'
-          : 'Claude';
+  const roleLabel = getProviderMetadata(child.provider).label;
   const description = firstUserSummary(child.messages) ?? `${roleLabel} spawned session`;
 
   return {

@@ -330,6 +330,7 @@ const codexProvider: Provider = {
         cwd: workingDir,
         stdio: ['pipe', 'pipe', 'pipe'],
       },
+      stdout: spec.stdout,
     };
   },
 
@@ -340,6 +341,7 @@ const codexProvider: Provider = {
       command: 'codex',
       args: ['exec', '--dangerously-bypass-approvals-and-sandbox', prompt],
       options: {},
+      stdout: 'text',
     };
   },
 

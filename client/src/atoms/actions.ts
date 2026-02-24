@@ -1,4 +1,3 @@
-import { enableMapSet, produce } from 'immer';
 import type {
   ClientMessage,
   Conversation,
@@ -7,7 +6,8 @@ import type {
   QueuedMessage,
   ServerMessage,
 } from '@claude-web-view/shared';
-import { jotaiStore } from './store';
+import { enableMapSet, produce } from 'immer';
+import { DRAFT_KEY_PREFIX, PENDING_CONVERSATIONS_KEY, useUIStore } from '../stores/uiStore';
 import {
   activeConversationIdAtom,
   conversationsAtom,
@@ -16,7 +16,7 @@ import {
   streamingContentAtom,
   wsStatusAtom,
 } from './conversations';
-import { DRAFT_KEY_PREFIX, PENDING_CONVERSATIONS_KEY, useUIStore } from '../stores/uiStore';
+import { jotaiStore } from './store';
 
 // Enable Immer's Map/Set support — must be called once before any produce() on Maps.
 enableMapSet();
@@ -171,7 +171,13 @@ export function createConversation(
   );
   jotaiStore.set(activeConversationIdAtom, id);
 
-  savePendingConversation({ id, workingDirectory, provider, model, createdAt: stub.createdAt.toISOString() });
+  savePendingConversation({
+    id,
+    workingDirectory,
+    provider,
+    model,
+    createdAt: stub.createdAt.toISOString(),
+  });
   send({ type: 'new_conversation', id, workingDirectory, provider, model, swarmDebugPrefix });
 
   return id;
@@ -259,13 +265,13 @@ export function handleMessage(data: ServerMessage): void {
   switch (data.type) {
     case 'init': {
       console.log(`[WS] init: ${data.conversations.length} conversations`);
-      data.conversations.forEach((conv) => {
-        console.log(`[WS] init conv ${conv.id.substring(0, 8)}: ${conv.messages.length} messages`);
-      });
 
       // Merge into existing Map — progressive loading may have sent batches before init.
       const convMap = new Map(jotaiStore.get(conversationsAtom));
-      data.conversations.forEach((conv) => convMap.set(conv.id, conv));
+      for (let i = 0; i < data.conversations.length; i++) {
+        const conv = data.conversations[i];
+        convMap.set(conv.id, conv);
+      }
 
       // Reconcile pending stubs from localStorage
       for (const pc of loadPendingConversations()) {
@@ -306,12 +312,16 @@ export function handleMessage(data: ServerMessage): void {
 
       // Drop stale streaming state from before this reconnect
       chunkBuffer.clear();
-      const cleanedStreaming = produce(jotaiStore.get(streamingContentAtom), (draft) => {
-        for (const [id] of draft) {
-          const conv = convMap.get(id);
-          if (!conv || !conv.isStreaming) draft.delete(id);
-        }
-      });
+      const oldStreaming = jotaiStore.get(streamingContentAtom);
+      let cleanedStreaming = oldStreaming;
+      if (oldStreaming.size > 0) {
+        cleanedStreaming = produce(oldStreaming, (draft) => {
+          for (const [id] of draft) {
+            const conv = convMap.get(id);
+            if (!conv || !conv.isStreaming) draft.delete(id);
+          }
+        });
+      }
 
       jotaiStore.set(defaultCwdAtom, data.defaultCwd);
       jotaiStore.set(conversationsAtom, convMap);
@@ -326,7 +336,8 @@ export function handleMessage(data: ServerMessage): void {
           const existing = draft.get(data.conversation.id);
           draft.set(data.conversation.id, {
             ...data.conversation,
-            swarmDebugPrefix: data.conversation.swarmDebugPrefix ?? existing?.swarmDebugPrefix ?? null,
+            swarmDebugPrefix:
+              data.conversation.swarmDebugPrefix ?? existing?.swarmDebugPrefix ?? null,
           });
         })
       );
@@ -355,7 +366,9 @@ export function handleMessage(data: ServerMessage): void {
     }
 
     case 'message': {
-      console.log(`[WS] message event: role=${data.role}, content="${data.content.substring(0, 50)}"`);
+      console.log(
+        `[WS] message event: role=${data.role}, content="${data.content.substring(0, 50)}"`
+      );
       let newMessageIndex: number | null = null;
 
       jotaiStore.set(
@@ -387,7 +400,10 @@ export function handleMessage(data: ServerMessage): void {
 
     case 'chunk': {
       if (data.text.length > 0) {
-        chunkBuffer.set(data.conversationId, (chunkBuffer.get(data.conversationId) ?? '') + data.text);
+        chunkBuffer.set(
+          data.conversationId,
+          (chunkBuffer.get(data.conversationId) ?? '') + data.text
+        );
         scheduleChunkFlush();
       }
       break;

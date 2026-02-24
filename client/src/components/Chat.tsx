@@ -1,15 +1,11 @@
+import { useAtomValue } from 'jotai';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useAtomValue } from 'jotai';
 // Solarized Dark theme for syntax highlighting - matches app aesthetic
 import 'highlight.js/styles/base16/solarized-dark.css';
-import type {
-  ModelId,
-  ModelInfo,
-  Provider,
-} from '@claude-web-view/shared';
+import type { ModelId, ModelInfo } from '@claude-web-view/shared';
+import { PROVIDER_OPTIONS } from '@claude-web-view/shared';
 import { useDropzone } from 'react-dropzone';
-import { useSavedPrompts } from '../hooks/useSavedPrompts';
 import {
   cancelQueuedMessage,
   clearQueue,
@@ -26,6 +22,7 @@ import {
   conversationCountAtom,
   streamingAtomFamily,
 } from '../atoms/conversations';
+import { useSavedPrompts } from '../hooks/useSavedPrompts';
 import { DRAFT_KEY_PREFIX, useUIStore } from '../stores/uiStore';
 import { buildUnifiedSubAgents } from '../utils/subAgents';
 import { formatTimeAgo } from '../utils/time';
@@ -169,11 +166,7 @@ export function Chat() {
   const isRunningRef = useRef(isRunning);
   isRunningRef.current = isRunning;
   const canInput = confirmed;
-  const availableProviders: Array<{ id: Provider; label: string }> = [
-    { id: 'claude', label: 'Claude' },
-    { id: 'codex', label: 'Codex' },
-    { id: 'opencode', label: 'OpenCode' },
-  ];
+  const availableProviders = PROVIDER_OPTIONS;
 
   const willQueue = confirmed && (isRunning || isStreaming);
   const hasContent = hasInput || pendingFiles.length > 0;

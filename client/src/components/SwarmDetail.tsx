@@ -6,12 +6,12 @@ import type {
   SwarmRun,
   SwarmRunSummary,
 } from '@claude-web-view/shared';
+import { useAtomValue } from 'jotai';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { useSwarmRuntimeSnapshots } from '../hooks/useSwarmRuntimeSnapshots';
-import { useAtomValue } from 'jotai';
 import { createConversation } from '../atoms/actions';
 import { allConversationsAtom, conversationAtomFamily } from '../atoms/conversations';
+import { useSwarmRuntimeSnapshots } from '../hooks/useSwarmRuntimeSnapshots';
 import { useUIStore } from '../stores/uiStore';
 import { getProjectName, getProjectRoot } from '../utils/swarmUtils';
 import { getWorkerVisibilitySummary } from '../utils/swarmWorkerVisibility';

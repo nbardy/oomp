@@ -1,10 +1,10 @@
 import type { Conversation, Message } from '@claude-web-view/shared';
+import { useAtomValue } from 'jotai';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { allConversationsAtom } from '../atoms/conversations';
 import { useFolderFilter } from '../hooks/useFolderFilter';
 import { useUrlFolderSelection } from '../hooks/useUrlFolderSelection';
-import { useAtomValue } from 'jotai';
-import { allConversationsAtom } from '../atoms/conversations';
 import { useUIStore } from '../stores/uiStore';
 import { getProjectColor } from '../utils/projectColors';
 import { formatTimeAgo, getLastMessageTime } from '../utils/time';

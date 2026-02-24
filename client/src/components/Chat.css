@@ -122,6 +122,11 @@
   color: var(--green);
 }
 
+.provider-picker-trigger.gemini {
+  background: color-mix(in oklch, var(--blue), transparent 75%);
+  color: var(--blue-bright);
+}
+
 .provider-picker-caret {
   font-size: 9px;
   opacity: 0.7;

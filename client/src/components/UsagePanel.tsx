@@ -1,3 +1,4 @@
+import { PROVIDER_OPTIONS, type Provider, getProviderMetadata } from '@claude-web-view/shared';
 import { useEffect, useState } from 'react';
 import './UsagePanel.css';
 
@@ -15,7 +16,7 @@ interface DailyUsage {
 
 interface SessionUsage {
   sessionId: string;
-  provider: 'claude' | 'codex' | 'opencode' | 'gemini';
+  provider: Provider;
   model: string;
   inputTokens: number;
   outputTokens: number;
@@ -45,7 +46,7 @@ interface UsageData {
   };
 }
 
-type ProviderTab = 'all' | 'claude' | 'codex' | 'opencode' | 'gemini';
+type ProviderTab = 'all' | Provider;
 
 function formatCost(usd: number): string {
   if (usd === 0) return '$0.00';
@@ -128,6 +129,7 @@ export function UsagePanel({ onClose }: Props) {
   const [loading, setLoading] = useState(data === null);
   const [days, setDays] = useState(7);
   const [tab, setTab] = useState<ProviderTab>('all');
+  const providerTabs = ['all', ...PROVIDER_OPTIONS.map((provider) => provider.id)] as const;
 
   useEffect(() => {
     // Show stale data while revalidating (don't flash loading if we have cache)
@@ -193,22 +195,14 @@ export function UsagePanel({ onClose }: Props) {
             <>
               {/* Provider toggle */}
               <div className="usage-tab-row">
-                {(['all', 'claude', 'codex', 'opencode', 'gemini'] as ProviderTab[]).map((t) => (
+                {(['all', ...providerTabs] as ProviderTab[]).map((t) => (
                   <button
                     key={t}
                     type="button"
                     className={`usage-tab ${tab === t ? 'active' : ''}`}
-                    onClick={() => setTab(t)}
+                    onClick={() => setTab(t === 'all' ? 'all' : (t as Provider))}
                   >
-                    {t === 'all'
-                      ? 'All'
-                      : t === 'claude'
-                        ? 'Claude'
-                        : t === 'codex'
-                          ? 'Codex'
-                          : t === 'opencode'
-                            ? 'OpenCode'
-                            : 'Gemini'}
+                    {t === 'all' ? 'All' : getProviderMetadata(t).label}
                   </button>
                 ))}
               </div>
@@ -299,13 +293,7 @@ export function UsagePanel({ onClose }: Props) {
                     {filteredSessions.slice(0, 10).map((s) => (
                       <div key={s.sessionId} className="usage-daily-row">
                         <span className="usage-session-provider">
-                          {s.provider === 'claude'
-                            ? 'C'
-                            : s.provider === 'codex'
-                              ? 'X'
-                              : s.provider === 'gemini'
-                                ? 'G'
-                                : 'O'}
+                          {getProviderMetadata(s.provider).shortLabel}
                         </span>
                         <span className="usage-session-id">{s.sessionId.slice(0, 8)}</span>
                         <span className="usage-daily-date">{s.date.slice(5)}</span>

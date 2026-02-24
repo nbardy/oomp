@@ -1,7 +1,7 @@
+import type { ClientMessage, Conversation } from '@claude-web-view/shared';
 import { atom } from 'jotai';
 import { atomFamily } from 'jotai-family';
-import type { ClientMessage, Conversation } from '@claude-web-view/shared';
-import { getLastMessageTime } from '../utils/time';
+import { getConversationLastActivity } from '../utils/time';
 
 // =============================================================================
 // Primary State Atoms
@@ -70,23 +70,20 @@ export const childConversationsAtomFamily = atomFamily((parentId: string) =>
 // useAtomValue(yourNewAtom). No other plumbing needed.
 // =============================================================================
 
-// All conversations sorted newest-first by last message time
+// All conversations sorted newest-first by last activity:
+// last message timestamp when present, otherwise conversation creation time.
 export const allConversationsAtom = atom((get) => {
   const map = get(conversationsAtom);
   return Array.from(map.values()).sort((a, b) => {
-    const aTime =
-      getLastMessageTime(a.messages)?.getTime() ?? new Date(a.createdAt).getTime();
-    const bTime =
-      getLastMessageTime(b.messages)?.getTime() ?? new Date(b.createdAt).getTime();
+    const aTime = getConversationLastActivity(a).getTime();
+    const bTime = getConversationLastActivity(b).getTime();
     return bTime - aTime;
   });
 });
 
 // Stable sorted ID list — only changes on add/delete/reorder.
 // Use with atomFamily for per-item subtree pruning (see CLAUDE.md).
-export const allConversationIdsAtom = atom((get) =>
-  get(allConversationsAtom).map((c) => c.id)
-);
+export const allConversationIdsAtom = atom((get) => get(allConversationsAtom).map((c) => c.id));
 
 // Total count — cheaper than subscribing to allConversationsAtom for existence checks
 export const conversationCountAtom = atom((get) => get(conversationsAtom).size);

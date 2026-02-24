@@ -26,7 +26,7 @@ import express, { type Request, type Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { WebSocket, WebSocketServer } from 'ws';
 import { loadAllConversations, pollForChanges } from './adapters/loader';
-import { type Provider, ProviderParseError, getProvider } from './providers';
+import { type Provider, ProviderParseError, getProvider, providers } from './providers';
 import { isModelIdValidForProvider, modelValidationHint } from './providers/model-validation';
 
 import multer from 'multer';
@@ -322,6 +322,12 @@ class Conversation extends EventEmitter {
         const trimmed = line.trim();
         if (!trimmed) continue;
         this._sawStdoutEventThisRun = true;
+
+        // Skip parsing if the provider doesn't output JSONL on stdout (e.g. Gemini).
+        // Gemini reads from disk, so we can safely ignore its raw text stdout.
+        if (spawnConfig.stdout !== 'jsonl') {
+          continue;
+        }
 
         try {
           const json = JSON.parse(trimmed) as unknown;
@@ -1009,12 +1015,12 @@ wss.on('connection', (ws: WebSocket) => {
           const model = data.model; // Provider-specific model (undefined = provider default)
           const swarmDebugPrefix = data.swarmDebugPrefix ?? null;
 
-          // Validate provider
-          if (provider !== 'claude' && provider !== 'codex' && provider !== 'opencode') {
+          // Validate provider against the registry — no manual list needed
+          if (!(provider in providers)) {
             ws.send(
               JSON.stringify({
                 type: 'error',
-                message: `Invalid provider: ${provider}. Must be 'claude', 'codex', or 'opencode'.`,
+                message: `Invalid provider: ${provider}. Must be one of: ${Object.keys(providers).join(', ')}.`,
               })
             );
             return;
@@ -1150,15 +1156,11 @@ wss.on('connection', (ws: WebSocket) => {
         case 'set_provider': {
           const conv = conversations.get(data.conversationId);
           if (conv) {
-            if (
-              data.provider !== 'claude' &&
-              data.provider !== 'codex' &&
-              data.provider !== 'opencode'
-            ) {
+            if (!(data.provider in providers)) {
               ws.send(
                 JSON.stringify({
                   type: 'error',
-                  message: `Invalid provider: ${data.provider}. Must be 'claude', 'codex', or 'opencode'.`,
+                  message: `Invalid provider: ${data.provider}. Must be one of: ${Object.keys(providers).join(', ')}.`,
                 })
               );
               return;
@@ -1353,11 +1355,15 @@ app.get('/api/settings', (_req: Request, res: Response) => {
 // Used by the Sidebar model dropdown to show available models per provider.
 app.get('/api/models', (req: Request, res: Response) => {
   const providerName = (req.query.provider as string) || 'claude';
-  if (providerName !== 'claude' && providerName !== 'codex' && providerName !== 'opencode') {
-    res.status(400).json({ error: `Invalid provider: ${providerName}` });
+  if (!(providerName in providers)) {
+    res
+      .status(400)
+      .json({
+        error: `Invalid provider: ${providerName}. Must be one of: ${Object.keys(providers).join(', ')}.`,
+      });
     return;
   }
-  const provider = getProvider(providerName);
+  const provider = getProvider(providerName as ProviderName);
   res.json(provider.listModels());
 });
 

@@ -1,9 +1,9 @@
 import type { Conversation } from '@claude-web-view/shared';
+import { useAtomValue } from 'jotai';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useSwarmRuntimeSnapshots } from '../hooks/useSwarmRuntimeSnapshots';
-import { useAtomValue } from 'jotai';
 import { allConversationsAtom } from '../atoms/conversations';
+import { useSwarmRuntimeSnapshots } from '../hooks/useSwarmRuntimeSnapshots';
 import { useUIStore } from '../stores/uiStore';
 import { getProjectColor } from '../utils/projectColors';
 import { getProjectName, getProjectRoot } from '../utils/swarmUtils';

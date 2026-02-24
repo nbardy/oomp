@@ -11,6 +11,7 @@
   "dependencies": {
     "@claude-web-view/shared": "workspace:*",
     "@tanstack/react-virtual": "^3.13.18",
+    "esbuild": "^0.27.3",
     "highlight.js": "^11.11.1",
     "immer": "^11.1.4",
     "jotai": "^2.18.0",
