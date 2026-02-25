@@ -51,6 +51,10 @@ let fileMtimes = new Map<string, number>();
 // flicker during gaps in Claude's output (thinking, API calls, tool use).
 const externallyRunning = new Map<string, number>();
 const EXTERNAL_GRACE_MS = 30_000; // 30s grace period before marking idle
+const LOCAL_COMPLETION_SUPPRESS_MS = EXTERNAL_GRACE_MS;
+// Session IDs that were just completed by a local process.
+// Suppresses false "external running" detection from trailing disk writes.
+const localCompletionSuppressUntil = new Map<string, number>();
 
 // All sessionIds belonging to known conversations (including rotated ones from resetProcess).
 // Prevents the file poller from importing an orphaned JSONL as a duplicate conversation.
@@ -107,6 +111,46 @@ const SEARCH_SNIPPET_RADIUS = 60; // chars before/after match to show
 const MIN_SEARCH_QUERY_LENGTH = 2;
 const SEARCH_MAX_RESULTS = 50;
 const SEARCH_HARD_RESULT_LIMIT = 200;
+
+function clearExternalRunningStatus(...ids: Array<string | null | undefined>): void {
+  for (const id of ids) {
+    if (!id) continue;
+    externallyRunning.delete(id);
+  }
+}
+
+function markLocalCompletionSuppression(...ids: Array<string | null | undefined>): void {
+  const until = Date.now() + LOCAL_COMPLETION_SUPPRESS_MS;
+  for (const id of ids) {
+    if (!id) continue;
+    localCompletionSuppressUntil.set(id, until);
+  }
+}
+
+function clearLocalCompletionSuppression(...ids: Array<string | null | undefined>): void {
+  for (const id of ids) {
+    if (!id) continue;
+    localCompletionSuppressUntil.delete(id);
+  }
+}
+
+function isLocalCompletionSuppressed(sessionId: string, now: number): boolean {
+  const until = localCompletionSuppressUntil.get(sessionId);
+  if (until === undefined) return false;
+  if (now >= until) {
+    localCompletionSuppressUntil.delete(sessionId);
+    return false;
+  }
+  return true;
+}
+
+function pruneLocalCompletionSuppressions(now: number): void {
+  for (const [sessionId, until] of localCompletionSuppressUntil) {
+    if (now >= until) {
+      localCompletionSuppressUntil.delete(sessionId);
+    }
+  }
+}
 
 /**
  * Broadcast data to all connected WebSocket clients.
@@ -310,6 +354,10 @@ class Conversation extends EventEmitter {
       return;
     }
 
+    // This session is now being handled locally; clear any stale external flags.
+    clearExternalRunningStatus(this.id, this.sessionId);
+    clearLocalCompletionSuppression(this.id, this.sessionId);
+
     const shouldResume = this._hasStartedSession;
     console.log(
       `[${this.id}] Spawning ${this.provider} (provider-session=${this.sessionId.substring(0, 8)}..., resume=${shouldResume})`
@@ -380,8 +428,11 @@ class Conversation extends EventEmitter {
             console.error(`[${this.id}] stderr:`, event.text);
             break;
           }
-          case 'turn.started':
+          case 'turn.started': {
+            this._sawStdoutEventThisRun = true;
+            this._ensureAssistantMessage();
             break;
+          }
           default:
             break;
         }
@@ -457,6 +508,10 @@ class Conversation extends EventEmitter {
       // Clear pending task tools — message_complete handles the normal path, but
       // kills/crashes skip it, leaving stale entries that accumulate across runs.
       this._pendingTaskTools.clear();
+      // Suppress external-running detection for trailing disk writes from this
+      // just-finished local run. Also clear any stale external flag immediately.
+      clearExternalRunningStatus(this.id, this.sessionId);
+      markLocalCompletionSuppression(this.id, this.sessionId);
       this.broadcastStatus();
       // Dequeue the "sending" message (completed or crashed) and process next.
       // This is the SINGLE code path for dequeue — not split between
@@ -486,6 +541,31 @@ class Conversation extends EventEmitter {
       });
   }
 
+  private _ensureAssistantMessage(): void {
+    const lastMsg = this.messages[this.messages.length - 1];
+    if (!lastMsg || lastMsg.role !== 'assistant') {
+      console.log(
+        `[${this.id}] Creating NEW assistant message (msg #${this.messages.length + 1})`
+      );
+      const newMsg: Message = {
+        role: 'assistant',
+        content: '',
+        timestamp: new Date(),
+      };
+      this.messages.push(newMsg);
+      this.broadcastMessage({
+        type: 'message',
+        role: 'assistant',
+        content: '',
+        conversationId: this.id,
+      });
+      if (!this.isStreaming) {
+        this.isStreaming = true;
+        this.broadcastStatus();
+      }
+    }
+  }
+
   /**
    * Unified output handler from executeCommand normalized events.
    */
@@ -498,34 +578,8 @@ class Conversation extends EventEmitter {
 
       case 'text_delta': {
         this._sawStdoutEventThisRun = true;
-        // BUG FIX: Must create assistant message BEFORE sending chunks
-        // The client expects the last message to be role='assistant' when receiving chunks.
-        // If we don't broadcast the assistant message first, chunks are silently ignored.
-        const lastMsg = this.messages[this.messages.length - 1];
-        if (!lastMsg || lastMsg.role !== 'assistant') {
-          console.log(
-            `[${this.id}] Creating NEW assistant message (msg #${this.messages.length + 1})`
-          );
-          const newMsg: Message = {
-            role: 'assistant',
-            content: '',
-            timestamp: new Date(),
-          };
-          this.messages.push(newMsg);
-          // Mark streaming BEFORE broadcasting the message, so the status
-          // broadcast that follows carries isStreaming=true in the same tick.
-          if (!this.isStreaming) {
-            this.isStreaming = true;
-            this.broadcastStatus();
-          }
-          // CRITICAL: Broadcast to client so it knows to create an assistant message
-          this.broadcastMessage({
-            type: 'message',
-            role: 'assistant',
-            content: '',
-            conversationId: this.id,
-          });
-        }
+        this._ensureAssistantMessage();
+        
         // Accumulate content server-side too (for debugging)
         const currentMsg = this.messages[this.messages.length - 1];
         if (currentMsg.role === 'assistant') {
@@ -545,6 +599,8 @@ class Conversation extends EventEmitter {
       }
 
       case 'tool_use': {
+        this._sawStdoutEventThisRun = true;
+        this._ensureAssistantMessage();
         // Check if this is a Task tool (sub-agent spawn)
         if (event.name === 'Task') {
           // Extract description from input if available, otherwise use generic
@@ -976,7 +1032,7 @@ wss.on('connection', (ws: WebSocket) => {
         type: 'init',
         conversations: Array.from(conversations.values()).map((c) => {
           const json = c.toJSON();
-          if (externallyRunning.has(c.id)) {
+          if (externallyRunning.has(c.sessionId) || externallyRunning.has(c.id)) {
             json.isRunning = true;
           }
           return json;
@@ -1114,6 +1170,8 @@ wss.on('connection', (ws: WebSocket) => {
             // Evict session IDs so the orphan-detection guard doesn't accumulate forever
             knownSessionIds.delete(convToDelete.sessionId);
             knownSessionIds.delete(convToDelete.id);
+            clearExternalRunningStatus(convToDelete.sessionId, convToDelete.id);
+            clearLocalCompletionSuppression(convToDelete.sessionId, convToDelete.id);
             ws.send(
               JSON.stringify({
                 type: 'conversation_deleted',
@@ -3599,9 +3657,12 @@ function startFilePolling(): void {
       // Sessions in `updated` had their files modified this cycle.
       // If we didn't launch them (not in activeIds), an external process wrote to them.
       const now = Date.now();
+      pruneLocalCompletionSuppressions(now);
 
       for (const sessionId of updated.keys()) {
         if (activeIds.has(sessionId)) continue;
+        // This session just completed locally; ignore file-tail writes.
+        if (isLocalCompletionSuppressed(sessionId, now)) continue;
 
         const existingConversation = findConversationBySessionId(sessionId);
         const conversationId = existingConversation?.id ?? sessionId;
@@ -3623,6 +3684,10 @@ function startFilePolling(): void {
       // Check grace period: only mark idle after EXTERNAL_GRACE_MS with no file changes.
       // This prevents flicker during gaps in Claude's output (thinking, API calls, tool use).
       for (const [sessionId, lastSeen] of externallyRunning) {
+        if (isLocalCompletionSuppressed(sessionId, now)) {
+          externallyRunning.delete(sessionId);
+          continue;
+        }
         if (now - lastSeen >= EXTERNAL_GRACE_MS) {
           externallyRunning.delete(sessionId);
           const existingConversation = findConversationBySessionId(sessionId);
