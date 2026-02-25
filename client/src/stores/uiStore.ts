@@ -45,6 +45,7 @@ interface UIState {
   galleryCollapsedProjects: string[];
   showTempSessions: boolean;
   showDoneConversations: boolean;
+  showAllWorkspaces: boolean;
 
   // Conversations marked "done" — hidden from sidebar, toggleable in gallery
   doneConversations: string[];
@@ -67,6 +68,7 @@ interface UIState {
   toggleGalleryCollapsed: (dir: string) => void;
   setShowTempSessions: (show: boolean) => void;
   setShowDoneConversations: (show: boolean) => void;
+  setShowAllWorkspaces: (show: boolean) => void;
 
   markDone: (conversationId: string) => void;
   unmarkDone: (conversationId: string) => void;
@@ -96,6 +98,7 @@ export const useUIStore = create<UIState>()(
       galleryCollapsedProjects: [],
       showTempSessions: false,
       showDoneConversations: false,
+      showAllWorkspaces: false,
       doneConversations: [],
       promotedWorkers: [],
       showWorkerConversations: false,
@@ -132,6 +135,8 @@ export const useUIStore = create<UIState>()(
       setShowTempSessions: (show) => set({ showTempSessions: show }),
 
       setShowDoneConversations: (show) => set({ showDoneConversations: show }),
+
+      setShowAllWorkspaces: (show) => set({ showAllWorkspaces: show }),
 
       markDone: (conversationId) =>
         set((s) => {
@@ -187,6 +192,7 @@ export const useUIStore = create<UIState>()(
         galleryCollapsedProjects: state.galleryCollapsedProjects,
         showTempSessions: state.showTempSessions,
         showDoneConversations: state.showDoneConversations,
+        showAllWorkspaces: state.showAllWorkspaces,
         doneConversations: state.doneConversations,
         promotedWorkers: state.promotedWorkers,
         showWorkerConversations: state.showWorkerConversations,

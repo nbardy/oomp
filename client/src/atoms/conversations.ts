@@ -81,6 +81,13 @@ export const allConversationsAtom = atom((get) => {
   });
 });
 
+// Conversations filtered by current workspace (defaultCwdAtom)
+export const workspaceConversationsAtom = atom((get) => {
+  const all = get(allConversationsAtom);
+  const cwd = get(defaultCwdAtom);
+  return all.filter((c) => c.workingDirectory === cwd || c.isWorker);
+});
+
 // Stable sorted ID list — only changes on add/delete/reorder.
 // Use with atomFamily for per-item subtree pruning (see CLAUDE.md).
 export const allConversationIdsAtom = atom((get) => get(allConversationsAtom).map((c) => c.id));

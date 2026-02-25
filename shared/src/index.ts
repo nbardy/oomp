@@ -291,6 +291,7 @@ export type QueuedMessage = z.infer<typeof QueuedMessageSchema>;
 //   from persisted files.
 export const ConversationSchema = z.object({
   id: z.string().uuid(),
+  sessionId: z.string().optional(),
   messages: z.array(MessageSchema),
   isRunning: z.boolean(),
   // Server-authoritative: assistant is actively producing content.
@@ -581,9 +582,18 @@ export type ChunkMessage = z.infer<typeof ChunkMessageSchema>;
 export const MessageCompleteMessageSchema = z.object({
   type: z.literal('message_complete'),
   conversationId: z.string().uuid(),
+  reason: z.enum(['success', 'error', 'out_of_tokens', 'killed']).optional(),
 });
 
 export type MessageCompleteMessage = z.infer<typeof MessageCompleteMessageSchema>;
+
+export const SessionBoundMessageSchema = z.object({
+  type: z.literal('session_bound'),
+  conversationId: z.string().uuid(),
+  sessionId: z.string(),
+});
+
+export type SessionBoundMessage = z.infer<typeof SessionBoundMessageSchema>;
 
 export const StatusMessageSchema = z.object({
   type: z.literal('status'),
@@ -656,6 +666,7 @@ export const ServerMessageSchema = z.discriminatedUnion('type', [
   MessageMessageSchema,
   ChunkMessageSchema,
   MessageCompleteMessageSchema,
+  SessionBoundMessageSchema,
   StatusMessageSchema,
   ErrorMessageSchema,
   SubAgentStartMessageSchema,

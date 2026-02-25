@@ -86,6 +86,7 @@ interface ChunkData {
 interface MessageCompleteData {
   type: 'message_complete';
   conversationId: string;
+  reason?: 'success' | 'error' | 'out_of_tokens' | 'killed';
 }
 
 interface MessageData {
@@ -460,6 +461,11 @@ class Conversation extends EventEmitter {
               unregisterSessionAlias(oldSessionId, { keepKnown: true });
             }
             registerSessionAlias(event.sessionId, this.id);
+            broadcastToAll({
+              type: 'session_bound',
+              conversationId: this.id,
+              sessionId: this.sessionId,
+            });
             break;
           }
           case 'text.delta': {
@@ -478,7 +484,7 @@ class Conversation extends EventEmitter {
             break;
           }
           case 'turn.complete': {
-            this.handleOutput({ type: 'message_complete' });
+            this.handleOutput({ type: 'message_complete', reason: event.reason as any });
             break;
           }
           case 'out_of_tokens': {
@@ -784,6 +790,7 @@ class Conversation extends EventEmitter {
         this.broadcastChunk({
           type: 'message_complete',
           conversationId: this.id,
+          reason: (event as any).reason,
         });
 
         // turn.complete means the assistant has finished this turn from the
@@ -794,6 +801,11 @@ class Conversation extends EventEmitter {
         clearExternalRunningStatus(this.id, this.sessionId);
         markLocalCompletionSuppression(this.id, this.sessionId);
         this.broadcastStatus();
+
+        broadcastToAll({
+          type: 'conversations_updated',
+          conversations: [this.toJSON()],
+        });
 
         break;
       }
@@ -1077,6 +1089,7 @@ class Conversation extends EventEmitter {
   toJSON(): ConversationData {
     return {
       id: this.id,
+      sessionId: this.sessionId,
       messages: this.messages,
       isRunning: this.isRunning,
       isStreaming: this.isStreaming,
@@ -3836,27 +3849,30 @@ function isOpenCodeSessionLike(sessionId: string): boolean {
 }
 
 /**
- * Reconcile OpenCode sessions when the CLI created a real `ses_*` id in local
- * storage but did not emit JSON events (so we could not capture sessionID on stdout).
+ * Reconcile sessions when the CLI created a real id in local
+ * storage but did not emit JSON events (so we could not capture sessionID on stdout)
+ * or the file poller ran before the event was processed.
  *
- * Without this, file polling imports the new `ses_*` as a duplicate conversation.
+ * Without this, file polling imports the new file as a duplicate conversation.
  */
-function findOpenCodeBootstrapMatch(
+function findBootstrapMatch(
   sessionId: string,
   convData: ConversationData
 ): Conversation | undefined {
-  if (convData.provider !== 'opencode') return undefined;
-  if (!isOpenCodeSessionLike(sessionId)) return undefined;
-
   const importedLastUser = getLastUserMessageContent(convData.messages);
   if (!importedLastUser) return undefined;
 
   const importedCreatedMs = new Date(convData.createdAt).getTime();
 
   for (const conv of conversations.values()) {
-    if (conv.provider !== 'opencode') continue;
+    if (conv.provider !== convData.provider) continue;
     if (conv.id === sessionId) continue;
-    if (isOpenCodeSessionLike(conv.sessionId)) continue;
+    
+    // If the conversation already has a provider session ID assigned, skip it.
+    // We know it's unassigned if sessionId === id (the UI-generated UUID).
+    if (conv.sessionId !== conv.id) continue;
+
+    if (conv.provider === 'opencode' && isOpenCodeSessionLike(conv.sessionId)) continue;
     if (conv.workingDirectory !== convData.workingDirectory) continue;
 
     const existingLastUser = getLastUserMessageContent(conv.messages);
@@ -3972,7 +3988,7 @@ function startFilePolling(): void {
         let existing = findConversationBySessionId(sessionId);
 
         if (!existing) {
-          const reconciled = findOpenCodeBootstrapMatch(sessionId, convData);
+          const reconciled = findBootstrapMatch(sessionId, convData);
           if (reconciled) {
             const oldSessionId = reconciled.sessionId;
             reconciled.sessionId = sessionId;
@@ -3982,7 +3998,7 @@ function startFilePolling(): void {
             registerSessionAlias(sessionId, reconciled.id);
             existing = reconciled;
             console.log(
-              `[Poll] Reconciled OpenCode session ${sessionId.substring(0, 8)} with conversation ${reconciled.id.substring(0, 8)} (old session ${oldSessionId.substring(0, 8)})`
+              `[Poll] Reconciled session ${sessionId.substring(0, 8)} with conversation ${reconciled.id.substring(0, 8)} (old session ${oldSessionId.substring(0, 8)})`
             );
           }
         }

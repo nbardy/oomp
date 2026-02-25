@@ -18,7 +18,7 @@ import opencodeProvider from './opencode';
 export type ProviderEvent =
   | { type: 'message_start' }
   | { type: 'text_delta'; text: string }
-  | { type: 'message_complete' }
+  | { type: 'message_complete'; reason?: 'success' | 'error' | 'out_of_tokens' | 'killed' }
   | { type: 'tool_use'; name: string; input: Record<string, unknown>; displayText?: string }
   | { type: 'error'; message: string };
 

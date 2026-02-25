@@ -306,16 +306,16 @@ export function handleMessage(data: ServerMessage): void {
     case 'init': {
       console.log(`[WS] init: ${data.conversations.length} conversations`);
 
-      // Merge into existing Map — progressive loading may have sent batches before init.
-      const convMap = new Map(jotaiStore.get(conversationsAtom));
+      // Total wipe and replace. Server is the absolute epoch.
+      const serverState = new Map<string, Conversation>();
       for (let i = 0; i < data.conversations.length; i++) {
         const conv = data.conversations[i];
-        convMap.set(conv.id, conv);
+        serverState.set(conv.id, conv);
       }
 
       // Reconcile pending stubs from localStorage
       for (const pc of loadPendingConversations()) {
-        if (convMap.has(pc.id)) {
+        if (serverState.has(pc.id)) {
           removePendingConversation(pc.id);
         } else {
           const stub: Conversation = {
@@ -337,7 +337,7 @@ export function handleMessage(data: ServerMessage): void {
             parentConversationId: null,
             modelName: null,
           };
-          convMap.set(pc.id, stub);
+          serverState.set(pc.id, stub);
           const normalizedWorkingDirectory = normalizeWorkingDirectory(pc.workingDirectory);
           setTimeout(() => {
             send({
@@ -351,22 +351,12 @@ export function handleMessage(data: ServerMessage): void {
         }
       }
 
+      jotaiStore.set(defaultCwdAtom, data.defaultCwd);
+      jotaiStore.set(conversationsAtom, serverState);
+      
       // Drop stale streaming state from before this reconnect
       chunkBuffer.clear();
-      const oldStreaming = jotaiStore.get(streamingContentAtom);
-      let cleanedStreaming = oldStreaming;
-      if (oldStreaming.size > 0) {
-        cleanedStreaming = produce(oldStreaming, (draft) => {
-          for (const [id] of draft) {
-            const conv = convMap.get(id);
-            if (!conv || !conv.isStreaming) draft.delete(id);
-          }
-        });
-      }
-
-      jotaiStore.set(defaultCwdAtom, data.defaultCwd);
-      jotaiStore.set(conversationsAtom, convMap);
-      jotaiStore.set(streamingContentAtom, cleanedStreaming);
+      jotaiStore.set(streamingContentAtom, new Map());
       break;
     }
 
@@ -383,6 +373,18 @@ export function handleMessage(data: ServerMessage): void {
         })
       );
       removePendingConversation(data.conversation.id);
+      break;
+    }
+
+    case 'session_bound': {
+      console.log(`[WS] session_bound: UI ${data.conversationId} -> CLI ${data.sessionId}`);
+      jotaiStore.set(
+        conversationsAtom,
+        produce(jotaiStore.get(conversationsAtom), (draft) => {
+          const conv = draft.get(data.conversationId);
+          if (conv) conv.sessionId = data.sessionId;
+        })
+      );
       break;
     }
 
@@ -456,40 +458,25 @@ export function handleMessage(data: ServerMessage): void {
       if (!conv) break;
 
       const streamingContent = jotaiStore.get(streamingContentAtom);
-      const hasAccumulated = !data.isStreaming && streamingContent.has(data.conversationId);
 
-      if (hasAccumulated) {
-        // Flush accumulated streaming text into conversations on stream end.
-        // Covers both clean completion (message_complete → status) and SIGTERM kills.
-        const accumulatedText = streamingContent.get(data.conversationId)!;
-
-        jotaiStore.set(
-          conversationsAtom,
-          produce(conversations, (draft) => {
-            const c = draft.get(data.conversationId)!;
+      jotaiStore.set(
+        conversationsAtom,
+        produce(conversations, (draft) => {
+          const c = draft.get(data.conversationId);
+          if (c) {
             c.isRunning = data.isRunning;
             c.isStreaming = data.isStreaming;
-            const lastMsg = c.messages[c.messages.length - 1];
-            if (lastMsg?.role === 'assistant') {
-              lastMsg.content += accumulatedText;
-            }
-          })
-        );
+          }
+        })
+      );
+
+      // If streaming stopped, nuke the transient streaming buffer. 
+      // The committed truth will come via conversations_updated.
+      if (!data.isStreaming && streamingContent.has(data.conversationId)) {
         jotaiStore.set(
           streamingContentAtom,
           produce(streamingContent, (draft) => {
             draft.delete(data.conversationId);
-          })
-        );
-      } else {
-        jotaiStore.set(
-          conversationsAtom,
-          produce(conversations, (draft) => {
-            const c = draft.get(data.conversationId);
-            if (c) {
-              c.isRunning = data.isRunning;
-              c.isStreaming = data.isStreaming;
-            }
           })
         );
       }
