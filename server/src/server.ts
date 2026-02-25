@@ -59,6 +59,9 @@ const localCompletionSuppressUntil = new Map<string, number>();
 // All sessionIds belonging to known conversations (including rotated ones from resetProcess).
 // Prevents the file poller from importing an orphaned JSONL as a duplicate conversation.
 const knownSessionIds = new Set<string>();
+// Provider session IDs can differ from UI conversation IDs (notably Gemini).
+// This alias map resolves provider-session identity back to canonical conversation IDs.
+const sessionAliasToConversationId = new Map<string, string>();
 
 // Track initial load readiness. Resolved immediately at startup so WebSocket
 // handlers can send init right away. Conversations stream in progressively
@@ -111,6 +114,50 @@ const SEARCH_SNIPPET_RADIUS = 60; // chars before/after match to show
 const MIN_SEARCH_QUERY_LENGTH = 2;
 const SEARCH_MAX_RESULTS = 50;
 const SEARCH_HARD_RESULT_LIMIT = 200;
+const LOG_CONTENT_PREVIEW_CHARS = 140;
+const STARTUP_INITIAL_LOAD_LIMIT = readPositiveIntEnv('CWV_STARTUP_INITIAL_LOAD_LIMIT', 500);
+const STARTUP_PARSE_CONCURRENCY = readPositiveIntEnv('CWV_STARTUP_PARSE_CONCURRENCY', 16);
+const STARTUP_LOAD_BATCH_SIZE = readPositiveIntEnv('CWV_STARTUP_BATCH_SIZE', 100);
+const STARTUP_PROGRESS_FILE_STEP = readPositiveIntEnv('CWV_STARTUP_LOG_EVERY_FILES', 500);
+
+function readPositiveIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return parsed;
+}
+
+function formatLogPreview(content: string, maxChars = LOG_CONTENT_PREVIEW_CHARS): string {
+  return content.replace(/\s+/g, ' ').slice(0, maxChars);
+}
+
+function registerSessionAlias(sessionId: string | null | undefined, conversationId: string): void {
+  if (!sessionId) return;
+  sessionAliasToConversationId.set(sessionId, conversationId);
+  knownSessionIds.add(sessionId);
+}
+
+function unregisterSessionAlias(
+  sessionId: string | null | undefined,
+  options: { keepKnown?: boolean } = {}
+): void {
+  if (!sessionId) return;
+  sessionAliasToConversationId.delete(sessionId);
+  if (!options.keepKnown) {
+    knownSessionIds.delete(sessionId);
+  }
+}
+
+function unregisterConversationAliases(
+  conversationId: string,
+  options: { keepKnown?: boolean } = {}
+): void {
+  for (const [sessionId, mappedConversationId] of sessionAliasToConversationId) {
+    if (mappedConversationId !== conversationId) continue;
+    unregisterSessionAlias(sessionId, options);
+  }
+}
 
 function clearExternalRunningStatus(...ids: Array<string | null | undefined>): void {
   for (const id of ids) {
@@ -216,7 +263,7 @@ function normalizeProviderErrorMessage(message: string): string {
 // STATE MACHINE
 // =============
 // Server-side (authoritative):
-//   isRunning   — process is alive (spawn → true, close → false)
+//   isRunning   — turn is active (spawn → true, turn.complete/close → false)
 //   queue[]     — server-owned FIFO (pending → sending → removed on close)
 //
 // Client-side (derived, NOT in this class):
@@ -226,9 +273,9 @@ function normalizeProviderErrorMessage(message: string): string {
 //
 // Broadcast sequence on normal completion:
 //   1. message_complete  → client stops streaming indicator
-//   2. status:false      → client marks process done (from close handler)
-//   3. queue_updated     → client mirrors updated queue
-//   4. processQueue()    → server spawns next message if queued
+//   2. status:false      → client marks turn complete (from turn.complete)
+//   3. queue_updated     → client mirrors updated queue (from close handler)
+//   4. processQueue()    → server spawns next message if queued (after close)
 //
 // Kill paths (all lead to close handler):
 //   stop_conversation WS → stop() → SIGTERM → close
@@ -242,7 +289,7 @@ class Conversation extends EventEmitter {
   process: ChildProcess | null;
   isRunning: boolean;
   // Server-authoritative: assistant is actively producing content.
-  // INVARIANT: !isRunning → !isStreaming (enforced in close handler).
+  // INVARIANT: !isRunning → !isStreaming (enforced in message_complete/close handlers).
   isStreaming: boolean;
   createdAt: Date;
   workingDirectory: string;
@@ -312,7 +359,7 @@ class Conversation extends EventEmitter {
     // sessionId defaults to id so JSONL filename matches Map key (no poller mismatch).
     // Only differs from id after resetProcess() rotates it for fresh CLI context.
     this.sessionId = existingSessionId ?? id;
-    knownSessionIds.add(this.sessionId);
+    registerSessionAlias(this.sessionId, this.id);
     this.messages = [];
     this.process = null;
     this.isRunning = false;
@@ -349,7 +396,7 @@ class Conversation extends EventEmitter {
    * First turn omits resumeSessionId; subsequent turns resume with the captured session ID.
    */
   private spawnForMessage(content: string): void {
-    if (this.isRunning) {
+    if (this.process || this.isRunning) {
       console.warn(`[${this.id}] Already processing a message, ignoring`);
       return;
     }
@@ -392,8 +439,12 @@ class Conversation extends EventEmitter {
             if (event.sessionId !== this.sessionId) {
               console.log(`[${this.id}] Session captured: ${event.sessionId}`);
             }
+            const oldSessionId = this.sessionId;
             this.sessionId = event.sessionId;
-            knownSessionIds.add(event.sessionId);
+            if (oldSessionId !== event.sessionId) {
+              unregisterSessionAlias(oldSessionId, { keepKnown: true });
+            }
+            registerSessionAlias(event.sessionId, this.id);
             break;
           }
           case 'text.delta': {
@@ -448,8 +499,10 @@ class Conversation extends EventEmitter {
     void turn.completed
       .then(({ exitCode, sessionId }) => {
         if (sessionId && sessionId !== this.sessionId) {
+          const oldSessionId = this.sessionId;
           this.sessionId = sessionId;
-          knownSessionIds.add(sessionId);
+          unregisterSessionAlias(oldSessionId, { keepKnown: true });
+          registerSessionAlias(sessionId, this.id);
         }
 
       const durationMs = Date.now() - this._processStartTime;
@@ -711,7 +764,13 @@ class Conversation extends EventEmitter {
           conversationId: this.id,
         });
 
+        // turn.complete means the assistant has finished this turn from the
+        // user's perspective; clear busy state now instead of waiting for
+        // child-process teardown.
         this.isStreaming = false;
+        this.isRunning = false;
+        clearExternalRunningStatus(this.id, this.sessionId);
+        markLocalCompletionSuppression(this.id, this.sessionId);
         this.broadcastStatus();
 
         break;
@@ -744,9 +803,11 @@ class Conversation extends EventEmitter {
   }
 
   sendMessage(content: string): void {
-    console.log(`[${this.id}] sendMessage called, isRunning=${this.isRunning}`);
+    console.log(
+      `[${this.id}] sendMessage called, isRunning=${this.isRunning}, hasProcess=${this.process !== null}, queueDepth=${this.queue.length}, contentLen=${content.length}, preview="${formatLogPreview(content)}"`
+    );
 
-    if (this.isRunning) {
+    if (this.process || this.isRunning) {
       console.warn(`[${this.id}] Already processing a message, ignoring`);
       return;
     }
@@ -816,7 +877,8 @@ class Conversation extends EventEmitter {
     // Generate new session ID for fresh context
     const oldSessionId = this.sessionId;
     this.sessionId = uuidv4();
-    knownSessionIds.add(this.sessionId);
+    unregisterSessionAlias(oldSessionId, { keepKnown: true });
+    registerSessionAlias(this.sessionId, this.id);
     this._hasStartedSession = false;
     console.log(
       `[${this.id}] Reset session: ${oldSessionId.substring(0, 8)}... -> ${this.sessionId.substring(0, 8)}...`
@@ -853,6 +915,7 @@ class Conversation extends EventEmitter {
    * process immediately. Otherwise it sits until the next status/ready change.
    */
   enqueueMessage(content: string): void {
+    const queueDepthBefore = this.queue.length;
     const msg: QueuedMessage = {
       id: crypto.randomUUID(),
       content,
@@ -860,7 +923,9 @@ class Conversation extends EventEmitter {
       status: 'pending',
     };
     this.queue.push(msg);
-    console.log(`[${this.id}] Queued message: "${content.substring(0, 30)}"`);
+    console.log(
+      `[${this.id}] Queued message id=${msg.id.substring(0, 8)}, queueDepth=${queueDepthBefore}->${this.queue.length}, contentLen=${content.length}, preview="${formatLogPreview(content)}"`
+    );
     this.broadcastQueue();
     this.processQueue();
   }
@@ -892,15 +957,22 @@ class Conversation extends EventEmitter {
    * Called from: close handler (after process exits), enqueueMessage (new message).
    */
   processQueue(): void {
-    if (this.isRunning) return;
+    if (this.process || this.isRunning) return;
     if (this.queue.length === 0) return;
 
     const next = this.queue[0];
     if (next.status === 'sending') return; // already in flight
 
     next.status = 'sending';
+    console.log(
+      `[${this.id}] processQueue sending id=${next.id.substring(0, 8)}, queueDepth=${this.queue.length}, contentLen=${next.content.length}, preview="${formatLogPreview(next.content)}"`
+    );
     this.broadcastQueue();
     this.sendMessage(next.content);
+  }
+
+  hasActiveProcess(): boolean {
+    return this.process !== null;
   }
 
   // Harness/provider can only be changed before the first turn has started.
@@ -1045,10 +1117,16 @@ wss.on('connection', (ws: WebSocket) => {
   ws.on('message', (message: Buffer | string) => {
     try {
       const data = JSON.parse(message.toString()) as ClientMessageData;
-      console.log(
-        `[WS] Received message type: ${data.type}`,
-        JSON.stringify(data).substring(0, 200)
-      );
+      if (data.type === 'queue_message') {
+        console.log(
+          `[WS] Received queue_message conversationId=${data.conversationId}, contentLen=${data.content.length}, preview="${formatLogPreview(data.content)}"`
+        );
+      } else {
+        console.log(
+          `[WS] Received message type: ${data.type}`,
+          JSON.stringify(data).substring(0, 200)
+        );
+      }
 
       switch (data.type) {
         case 'new_conversation': {
@@ -3492,27 +3570,30 @@ async function loadExistingConversations(): Promise<void> {
 
   try {
     const limit = 500;
-    const { mtimes } = await loadAllConversations((batch, progress) => {
-      // Hydrate each batch into server-side Conversation instances
-      const broadcastBatch: ConversationData[] = [];
-      for (const convData of batch) {
-        const conversation = hydrateConversation(convData);
-        conversations.set(convData.id, conversation);
-        broadcastBatch.push(conversation.toJSON());
-      }
+    const { mtimes } = await loadAllConversations({
+      limit,
+      onProgress: (batch, progress) => {
+        // Hydrate each batch into server-side Conversation instances
+        const broadcastBatch: ConversationData[] = [];
+        for (const convData of batch) {
+          const conversation = hydrateConversation(convData);
+          conversations.set(convData.id, conversation);
+          broadcastBatch.push(conversation.toJSON());
+        }
 
-      // Stream batch to all connected clients (most recent conversations arrive first)
-      if (broadcastBatch.length > 0) {
-        broadcastToAll({
-          type: 'conversations_updated',
-          conversations: broadcastBatch,
-        });
-      }
+        // Stream batch to all connected clients (most recent conversations arrive first)
+        if (broadcastBatch.length > 0) {
+          broadcastToAll({
+            type: 'conversations_updated',
+            conversations: broadcastBatch,
+          });
+        }
 
-      console.log(
-        `Loaded ${progress.loaded}/${progress.total} files (${conversations.size} conversations)...`
-      );
-    }, limit);
+        console.log(
+          `Loaded ${progress.loaded}/${progress.total} files (${conversations.size} conversations)...`
+        );
+      },
+    });
 
     fileMtimes = mtimes;
 
@@ -3559,7 +3640,7 @@ function findConversationBySessionId(sessionId: string): Conversation | undefine
 function collectActiveConversationAndSessionIds(): Set<string> {
   const activeIds = new Set<string>();
   for (const [id, conversation] of conversations) {
-    if (!conversation.isRunning) continue;
+    if (!conversation.hasActiveProcess()) continue;
     activeIds.add(id);
     activeIds.add(conversation.sessionId);
   }

@@ -177,19 +177,45 @@ async function parseOneFile(file: DiscoveredFile): Promise<ParsedResult> {
  * @returns conversations + mtime index for subsequent polling
  */
 export async function loadAllConversations(
-  onProgress?: LoadProgressCallback,
-  limit?: number
+  options: {
+    onProgress?: LoadProgressCallback;
+    limit?: number;
+    offset?: number;
+    concurrency?: number;
+    batchSize?: number;
+  } = {}
 ): Promise<LoadResult> {
-  const CONCURRENCY = 10; // macOS default fd limit is 256; 10 is very safe
-  const BATCH_SIZE = 50; // Emit progress every N files
+  const {
+    onProgress,
+    limit,
+    offset = 0,
+    concurrency = 10,
+    batchSize = 50,
+  } = options;
+
+  const normalizedConcurrency =
+    Number.isFinite(concurrency) && concurrency > 0 ? Math.floor(concurrency) : 10;
+  const normalizedBatchSize =
+    Number.isFinite(batchSize) && batchSize > 0 ? Math.floor(batchSize) : 50;
+  const normalizedOffset =
+    Number.isFinite(offset) && offset > 0 ? Math.floor(offset) : 0;
+  const normalizedLimit =
+    typeof limit === 'number' && Number.isFinite(limit) && limit > 0
+      ? Math.floor(limit)
+      : undefined;
 
   // Phase 1: Discover all files (sorted by mtime descending)
   const discoverStart = performance.now();
   console.log('Discovering persisted conversation files...');
   const files = await discoverAll(diskAdapters);
   const discoverTimeMs = performance.now() - discoverStart;
+
+  const startIndex = Math.min(normalizedOffset, files.length);
+  const endIndex = normalizedLimit ? Math.min(startIndex + normalizedLimit, files.length) : files.length;
+  const filesToParse = files.slice(startIndex, endIndex);
+
   console.log(
-    `Discovered ${files.length} persisted conversation sources in ${discoverTimeMs.toFixed(0)}ms (sorted by mtime), parsing with concurrency=${CONCURRENCY}...`
+    `Discovered ${files.length} persisted conversation sources in ${discoverTimeMs.toFixed(0)}ms (sorted by mtime), parsing ${filesToParse.length} with concurrency=${normalizedConcurrency}...`
   );
 
   // Phase 2: Parse files in parallel with batched progress callbacks.
@@ -219,9 +245,7 @@ export async function loadAllConversations(
 
   const parseStart = performance.now();
 
-  const filesToParse = limit && limit > 0 ? files.slice(0, limit) : files;
-
-  await forEachWithConcurrency(filesToParse, CONCURRENCY, async (file) => {
+  await forEachWithConcurrency(filesToParse, normalizedConcurrency, async (file) => {
     const result = await parseOneFile(file);
 
     const t = result.parseTimeMs;
@@ -238,7 +262,7 @@ export async function loadAllConversations(
 
     filesProcessed++;
 
-    if (onProgress && batchBuffer.length >= BATCH_SIZE) {
+    if (onProgress && batchBuffer.length >= normalizedBatchSize) {
       onProgress(batchBuffer, { loaded: filesProcessed, total: filesToParse.length });
       batchBuffer = [];
     }
