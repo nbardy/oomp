@@ -6,7 +6,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { createConversation } from '../atoms/actions';
 import {
   activeConversationIdAtom,
-  workspaceConversationsAtom,
+  allConversationsAtom,
   defaultCwdAtom,
   wsStatusAtom,
 } from '../atoms/conversations';
@@ -51,7 +51,7 @@ function timeAgoColor(minutesElapsed: number): string {
 }
 
 export function Sidebar() {
-  const allConversations = useAtomValue(workspaceConversationsAtom);
+  const allConversations = useAtomValue(allConversationsAtom);
   const activeConversationId = useAtomValue(activeConversationIdAtom);
   const defaultCwd = useAtomValue(defaultCwdAtom);
   const wsStatus = useAtomValue(wsStatusAtom);
