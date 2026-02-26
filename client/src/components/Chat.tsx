@@ -573,7 +573,12 @@ export function Chat() {
         </div>
       </div>
 
-      {unifiedSubAgents.length > 0 && <SubAgentPanel subAgents={unifiedSubAgents} />}
+      {unifiedSubAgents.length > 0 && (
+        <SubAgentPanel
+          subAgents={unifiedSubAgents}
+          workingDirectory={conversation.workingDirectory}
+        />
+      )}
 
       {conversation.messages.length === 0 ? (
         <div className="messages-container">

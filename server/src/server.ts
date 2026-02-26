@@ -344,6 +344,8 @@ class Conversation extends EventEmitter {
   // Per-turn watchdog timers.
   private _turnIdleTimer: NodeJS.Timeout | null = null;
   private _turnMaxTimer: NodeJS.Timeout | null = null;
+  // Track last known swarm run ID to detect newly launched swarms.
+  private _lastSwarmRunId: string | null = null;
 
   constructor(
     id: string,
@@ -398,6 +400,7 @@ class Conversation extends EventEmitter {
     this._stderrBuffer = '';
     this._sawStdoutEventThisRun = false;
     this._isResetting = false;
+    this._lastSwarmRunId = null;
   }
 
   /**
@@ -934,6 +937,7 @@ class Conversation extends EventEmitter {
     if (!this.isRunning) return;
     this._lastTurnEventAt = Date.now();
     this._refreshIdleWatchdog();
+    this._pollForNewSwarms();
   }
 
   private _refreshIdleWatchdog(): void {
@@ -945,6 +949,46 @@ class Conversation extends EventEmitter {
     this._turnIdleTimer = setTimeout(() => {
       this._handleTurnTimeout('idle');
     }, TURN_IDLE_TIMEOUT_MS);
+  }
+
+  /**
+   * Detects if the assistant launched a new Oompa Loompa Swarm by checking
+   * the local runs directory for a new ID compared to what we saw previously.
+   */
+  private _pollForNewSwarms(): void {
+    const snapshot = readLatestOompaRuntime(this.workingDirectory);
+    if (!snapshot.available || !snapshot.run) return;
+
+    const currentRunId = snapshot.run.runId;
+    if (this._lastSwarmRunId === null) {
+      // First time checking, just record the baseline
+      this._lastSwarmRunId = currentRunId;
+      return;
+    }
+
+    if (currentRunId !== this._lastSwarmRunId) {
+      this._lastSwarmRunId = currentRunId;
+      const swarmId = snapshot.run.swarmId ?? currentRunId;
+      
+      console.log(`[${this.id}] Detected new swarm run: ${swarmId}`);
+      
+      const newAgent: SubAgent = {
+        id: `swarm-${currentRunId}`,
+        description: `Swarm Run: ${swarmId} (${snapshot.run.totalWorkers} workers)`,
+        status: 'running',
+        toolUses: 0,
+        tokens: 0,
+        currentAction: 'Running swarm...',
+        startedAt: new Date(),
+      };
+
+      this.subAgents.push(newAgent);
+      broadcastToAll({
+        type: 'subagent_start',
+        conversationId: this.id,
+        subAgent: newAgent,
+      });
+    }
   }
 
   private _clearTurnWatchdogs(): void {

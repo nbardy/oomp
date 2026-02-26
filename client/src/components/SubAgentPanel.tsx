@@ -1,9 +1,11 @@
 import type { SubAgent } from '@claude-web-view/shared';
 import { useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import './SubAgentPanel.css';
 
 interface SubAgentPanelProps {
   subAgents: SubAgent[];
+  workingDirectory: string;
 }
 
 /**
@@ -17,7 +19,7 @@ interface SubAgentPanelProps {
  *
  * Auto-collapses when all agents finish. Can be manually toggled via Ctrl+O.
  */
-export function SubAgentPanel({ subAgents }: SubAgentPanelProps) {
+export function SubAgentPanel({ subAgents, workingDirectory }: SubAgentPanelProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   // Track whether the user has manually toggled — if so, don't auto-collapse/expand on hover
   const userToggledRef = useRef(false);
@@ -143,7 +145,16 @@ export function SubAgentPanel({ subAgents }: SubAgentPanelProps) {
                 {/* Agent info */}
                 <div className="subagent-info">
                   <span className="subagent-description">
-                    {truncateDescription(agent.description)}
+                    {agent.id.startsWith('swarm-') ? (
+                      <Link 
+                        to={`/swarms/project?project=${encodeURIComponent(workingDirectory)}`}
+                        className="swarm-link"
+                      >
+                        {truncateDescription(agent.description)}
+                      </Link>
+                    ) : (
+                      truncateDescription(agent.description)
+                    )}
                   </span>
                   <span className="subagent-stats">
                     {agent.toolUses > 0 && (
