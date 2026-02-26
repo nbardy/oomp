@@ -20,7 +20,7 @@ interface SubAgentPanelProps {
  * Auto-collapses when all agents finish. Can be manually toggled via Ctrl+O.
  */
 export function SubAgentPanel({ subAgents, workingDirectory }: SubAgentPanelProps) {
-  const [isExpanded, setIsExpanded] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(true);
   // Track whether the user has manually toggled — if so, don't auto-collapse/expand on hover
   const userToggledRef = useRef(false);
 

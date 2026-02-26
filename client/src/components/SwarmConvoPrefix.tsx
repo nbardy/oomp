@@ -54,7 +54,7 @@ function parseWorkerTable(prefix: string): {
 }
 
 export function SwarmConvoPrefix({ prefix, swarmId }: SwarmConvoPrefixProps) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(true);
 
   const stats = useMemo(() => parseStatsFromPrefix(prefix), [prefix]);
   const workerTable = useMemo(() => parseWorkerTable(prefix), [prefix]);

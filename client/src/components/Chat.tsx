@@ -580,6 +580,15 @@ export function Chat() {
         />
       )}
 
+      {conversation.swarmDebugPrefix && (
+        <div style={{ paddingBottom: conversation.messages.length === 0 ? '16px' : 0 }}>
+          <SwarmConvoPrefix
+            prefix={conversation.swarmDebugPrefix}
+            swarmId={conversation.swarmId ?? null}
+          />
+        </div>
+      )}
+
       {conversation.messages.length === 0 ? (
         <div className="messages-container">
           <div className="empty-state">
@@ -590,12 +599,6 @@ export function Chat() {
         </div>
       ) : (
         <div className="messages-container-wrapper">
-          {conversation.swarmDebugPrefix && (
-            <SwarmConvoPrefix
-              prefix={conversation.swarmDebugPrefix}
-              swarmId={conversation.swarmId ?? null}
-            />
-          )}
           <VirtualizedMessageList
             key={id}
             messageGroups={messageGroups}
