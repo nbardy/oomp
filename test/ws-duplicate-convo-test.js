@@ -11,7 +11,7 @@ console.log('=== Testing Duplicate Conversations Issue ===\\n');
 const ws = new WebSocket('ws://localhost:3000');
 const uniqueMarker = uuidv4();
 let createdConversationId = null;
-let receivedConversations = new Map();
+const receivedConversations = new Map();
 let isComplete = false;
 let testTimeout;
 
@@ -23,31 +23,36 @@ ws.on('message', (data) => {
   const msg = JSON.parse(data.toString());
 
   switch (msg.type) {
-    case 'init':
+    case 'init': {
       for (const conv of msg.conversations) {
         receivedConversations.set(conv.id, conv);
       }
       const initialCount = receivedConversations.size;
       console.log(`[WS] Init - ${initialCount} existing conversations`);
-      
-      ws.send(JSON.stringify({
-        type: 'new_conversation',
-        workingDirectory: process.cwd(),
-        provider: 'codex',
-      }));
+
+      ws.send(
+        JSON.stringify({
+          type: 'new_conversation',
+          workingDirectory: process.cwd(),
+          provider: 'codex',
+        })
+      );
       break;
+    }
 
     case 'conversation_created':
       createdConversationId = msg.conversation.id;
       console.log(`[WS] Conversation created: ${createdConversationId}`);
       receivedConversations.set(createdConversationId, msg.conversation);
-      
+
       console.log(`[WS] Sending test message with marker: ${uniqueMarker}`);
-      ws.send(JSON.stringify({
-        type: 'send_message',
-        conversationId: createdConversationId,
-        content: `Just repeat this exact UUID back to me: ${uniqueMarker}`,
-      }));
+      ws.send(
+        JSON.stringify({
+          type: 'send_message',
+          conversationId: createdConversationId,
+          content: `Just repeat this exact UUID back to me: ${uniqueMarker}`,
+        })
+      );
       break;
 
     case 'conversations_updated':
@@ -58,7 +63,7 @@ ws.on('message', (data) => {
 
     case 'status':
       if (!msg.isRunning && createdConversationId === msg.conversationId && !isComplete) {
-        console.log(`[WS] Process completed. Waiting 6 seconds for file poller...`);
+        console.log('[WS] Process completed. Waiting 6 seconds for file poller...');
         isComplete = true;
         setTimeout(() => {
           checkDuplicates();
@@ -70,11 +75,11 @@ ws.on('message', (data) => {
 
 function checkDuplicates() {
   clearTimeout(testTimeout);
-  console.log(`\\n=== Checking for duplicates ===`);
-  
-  let matches = [];
-  for (const [id, conv] of receivedConversations.entries()) {
-    const hasMarker = conv.messages.some(m => m.content && m.content.includes(uniqueMarker));
+  console.log('\\n=== Checking for duplicates ===');
+
+  const matches = [];
+  for (const [_id, conv] of receivedConversations.entries()) {
+    const hasMarker = conv.messages.some((m) => m.content?.includes(uniqueMarker));
     if (hasMarker) {
       matches.push(conv);
     }
@@ -82,14 +87,14 @@ function checkDuplicates() {
 
   console.log(`Found ${matches.length} conversation(s) with the marker.`);
   if (matches.length === 1) {
-    console.log(`[SUCCESS] No duplicates found! The conversation was properly reconciled.`);
+    console.log('[SUCCESS] No duplicates found! The conversation was properly reconciled.');
     console.log(`Conversation ID: ${matches[0].id}`);
     console.log(`Provider Session ID: ${matches[0].sessionId}`);
     ws.close();
     process.exit(0);
   } else {
     console.log(`[FAILED] Expected 1 conversation, found ${matches.length}`);
-    matches.forEach((m, i) => console.log(`Match ${i+1}: ID=${m.id}, SessionID=${m.sessionId}`));
+    matches.forEach((m, i) => console.log(`Match ${i + 1}: ID=${m.id}, SessionID=${m.sessionId}`));
     ws.close();
     process.exit(1);
   }

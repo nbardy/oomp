@@ -183,9 +183,16 @@ export function RobotLoader() {
         <div className="robot-loader-label">Loading...</div>
 
         <div className="robot-loader-controls">
-          <button onClick={() => setFast((f) => !f)}>Toggle speed</button>
-          <button onClick={() => setGlowOn((g) => !g)}>Toggle glow</button>
-          <button onClick={() => setDensity((d) => (d === 'dense' ? 'normal' : 'dense'))}>
+          <button type="button" onClick={() => setFast((f) => !f)}>
+            Toggle speed
+          </button>
+          <button type="button" onClick={() => setGlowOn((g) => !g)}>
+            Toggle glow
+          </button>
+          <button
+            type="button"
+            onClick={() => setDensity((d) => (d === 'dense' ? 'normal' : 'dense'))}
+          >
             Toggle dot density
           </button>
         </div>

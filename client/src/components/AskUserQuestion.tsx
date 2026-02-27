@@ -75,6 +75,7 @@ function QuestionCard({ question }: { question: Question }) {
       <div className="ask-question-options">
         {question.options.map((opt, oi) => (
           <button
+            type="button"
             key={oi}
             className={`ask-question-option ${selected.has(oi) ? 'selected' : ''}`}
             onClick={() => toggle(oi)}

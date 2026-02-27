@@ -208,6 +208,8 @@ export function SearchPalette({ isOpen, onClose, onSelectConversation, filterDir
       <div className="search-palette" onClick={(e) => e.stopPropagation()}>
         <div className="search-palette-input-row">
           <svg
+            role="img"
+            aria-label="Search"
             className="search-palette-icon"
             width="16"
             height="16"

@@ -37,7 +37,7 @@ ws.on('message', (data) => {
 
     case 'conversation_created':
       conversationId = msg.conversation.id;
-      console.log(`\n--- Turn 1: Sending first message ---`);
+      console.log('\n--- Turn 1: Sending first message ---');
       ws.send(
         JSON.stringify({
           type: 'send_message',
@@ -65,7 +65,7 @@ ws.on('message', (data) => {
         // First message complete, send second
         messageCount++;
         console.log(`\n[Turn 1 Response]: "${responses[0]}"\n`);
-        console.log(`--- Turn 2: Asking for the secret word ---`);
+        console.log('--- Turn 2: Asking for the secret word ---');
         ws.send(
           JSON.stringify({
             type: 'send_message',
@@ -79,7 +79,7 @@ ws.on('message', (data) => {
 
         // Check if ELEPHANT is in the response
         const hasElephant = responses[1].toUpperCase().includes('ELEPHANT');
-        console.log(`\n=== Results ===`);
+        console.log('\n=== Results ===');
         console.log(`Turn 1: ${responses[0].substring(0, 60)}...`);
         console.log(`Turn 2: ${responses[1]}`);
         console.log(`Context preserved (contains ELEPHANT): ${hasElephant}`);

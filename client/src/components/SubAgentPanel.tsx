@@ -89,7 +89,6 @@ export function SubAgentPanel({ subAgents, workingDirectory }: SubAgentPanelProp
   return (
     <div
       className="subagent-panel"
-      tabIndex={0}
       onKeyDown={handleKeyDown}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
@@ -146,7 +145,7 @@ export function SubAgentPanel({ subAgents, workingDirectory }: SubAgentPanelProp
                 <div className="subagent-info">
                   <span className="subagent-description">
                     {agent.id.startsWith('swarm-') ? (
-                      <Link 
+                      <Link
                         to={`/swarms/project?project=${encodeURIComponent(workingDirectory)}`}
                         className="swarm-link"
                       >

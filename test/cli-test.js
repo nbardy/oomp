@@ -21,7 +21,7 @@ function testClaude() {
     });
 
     let stdout = '';
-    let stderr = '';
+    let _stderr = '';
 
     proc.stdout.on('data', (data) => {
       const chunk = data.toString();
@@ -30,7 +30,7 @@ function testClaude() {
     });
 
     proc.stderr.on('data', (data) => {
-      stderr += data.toString();
+      _stderr += data.toString();
       console.log('[stderr]', data.toString().substring(0, 200));
     });
 
@@ -56,7 +56,7 @@ function testClaude() {
 
     // Send the prompt
     console.log('[stdin] Writing prompt...');
-    proc.stdin.write(PROMPT + '\n');
+    proc.stdin.write(`${PROMPT}\n`);
     proc.stdin.end(); // Important: signal end of input
 
     // Timeout after 30 seconds

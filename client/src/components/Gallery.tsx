@@ -237,7 +237,7 @@ export function Gallery({ filter }: GalleryProps = {}) {
     return (
       <div className="gallery-view">
         <div className="gallery-done-header">
-          <button className="back-to-gallery-btn" onClick={() => navigate('/')}>
+          <button type="button" className="back-to-gallery-btn" onClick={() => navigate('/')}>
             &#8592; Gallery
           </button>
           <h2>Done Conversations</h2>
@@ -253,7 +253,7 @@ export function Gallery({ filter }: GalleryProps = {}) {
     return (
       <div className="gallery-view">
         <div className="gallery-done-header">
-          <button className="back-to-gallery-btn" onClick={() => navigate('/')}>
+          <button type="button" className="back-to-gallery-btn" onClick={() => navigate('/')}>
             &#8592; Gallery
           </button>
           <h2>Worker Conversations</h2>
@@ -269,14 +269,14 @@ export function Gallery({ filter }: GalleryProps = {}) {
     <div className="gallery-view">
       {isDoneView ? (
         <div className="gallery-done-header">
-          <button className="back-to-gallery-btn" onClick={() => navigate('/')}>
+          <button type="button" className="back-to-gallery-btn" onClick={() => navigate('/')}>
             &#8592; Gallery
           </button>
           <h2>Done Conversations ({doneSessionCount})</h2>
         </div>
       ) : isWorkersView ? (
         <div className="gallery-done-header">
-          <button className="back-to-gallery-btn" onClick={() => navigate('/')}>
+          <button type="button" className="back-to-gallery-btn" onClick={() => navigate('/')}>
             &#8592; Gallery
           </button>
           <h2>Worker Sessions ({workerSessionCount})</h2>
@@ -381,6 +381,7 @@ export function Gallery({ filter }: GalleryProps = {}) {
 
                     {showMoreButton && (
                       <button
+                        type="button"
                         className="show-more-btn"
                         onClick={(e) => {
                           e.stopPropagation();
@@ -393,6 +394,7 @@ export function Gallery({ filter }: GalleryProps = {}) {
 
                     {isExpanded && totalCount > CONVERSATIONS_PER_PROJECT && (
                       <button
+                        type="button"
                         className="show-more-btn"
                         onClick={(e) => {
                           e.stopPropagation();
@@ -412,6 +414,7 @@ export function Gallery({ filter }: GalleryProps = {}) {
         {!isDoneView && !isWorkersView && tempSessionCount > 0 && (
           <div className="temp-sessions-section">
             <button
+              type="button"
               className="temp-sessions-toggle"
               onClick={() => setShowTempSessions(!showTempSessions)}
             >
@@ -510,6 +513,7 @@ export function Gallery({ filter }: GalleryProps = {}) {
 
                         {showMoreButton && (
                           <button
+                            type="button"
                             className="show-more-btn"
                             onClick={(e) => {
                               e.stopPropagation();
@@ -522,6 +526,7 @@ export function Gallery({ filter }: GalleryProps = {}) {
 
                         {isExpanded && totalCount > CONVERSATIONS_PER_PROJECT && (
                           <button
+                            type="button"
                             className="show-more-btn"
                             onClick={(e) => {
                               e.stopPropagation();
@@ -544,6 +549,7 @@ export function Gallery({ filter }: GalleryProps = {}) {
           <div className="worker-sessions-section">
             {!isWorkersView && (
               <button
+                type="button"
                 className="worker-sessions-toggle"
                 onClick={() => setShowWorkerConversations(!showWorkerConversations)}
               >
@@ -611,6 +617,7 @@ export function Gallery({ filter }: GalleryProps = {}) {
                                   </div>
                                   <div className="gallery-card-status">
                                     <button
+                                      type="button"
                                       className="promote-worker-btn"
                                       onClick={(e) => {
                                         e.stopPropagation();
@@ -645,6 +652,7 @@ export function Gallery({ filter }: GalleryProps = {}) {
 
                         {showMoreButton && (
                           <button
+                            type="button"
                             className="show-more-btn"
                             onClick={(e) => {
                               e.stopPropagation();
@@ -657,6 +665,7 @@ export function Gallery({ filter }: GalleryProps = {}) {
 
                         {isExpanded && totalCount > CONVERSATIONS_PER_PROJECT && (
                           <button
+                            type="button"
                             className="show-more-btn"
                             onClick={(e) => {
                               e.stopPropagation();
@@ -679,6 +688,7 @@ export function Gallery({ filter }: GalleryProps = {}) {
           <div className="done-sessions-section">
             {!isDoneView && (
               <button
+                type="button"
                 className="done-sessions-toggle"
                 onClick={() => setShowDoneConversations(!showDoneConversations)}
               >
@@ -749,6 +759,7 @@ export function Gallery({ filter }: GalleryProps = {}) {
                                   </div>
                                   <div className="gallery-card-status">
                                     <button
+                                      type="button"
                                       className="undo-done-btn"
                                       onClick={(e) => {
                                         e.stopPropagation();
@@ -783,6 +794,7 @@ export function Gallery({ filter }: GalleryProps = {}) {
 
                         {showMoreButton && (
                           <button
+                            type="button"
                             className="show-more-btn"
                             onClick={(e) => {
                               e.stopPropagation();
@@ -795,6 +807,7 @@ export function Gallery({ filter }: GalleryProps = {}) {
 
                         {isExpanded && totalCount > CONVERSATIONS_PER_PROJECT && (
                           <button
+                            type="button"
                             className="show-more-btn"
                             onClick={(e) => {
                               e.stopPropagation();

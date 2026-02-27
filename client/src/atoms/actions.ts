@@ -353,7 +353,7 @@ export function handleMessage(data: ServerMessage): void {
 
       jotaiStore.set(defaultCwdAtom, data.defaultCwd);
       jotaiStore.set(conversationsAtom, serverState);
-      
+
       // Drop stale streaming state from before this reconnect
       chunkBuffer.clear();
       jotaiStore.set(streamingContentAtom, new Map());
@@ -470,7 +470,7 @@ export function handleMessage(data: ServerMessage): void {
         })
       );
 
-      // If streaming stopped, nuke the transient streaming buffer. 
+      // If streaming stopped, nuke the transient streaming buffer.
       // The committed truth will come via conversations_updated.
       if (!data.isStreaming && streamingContent.has(data.conversationId)) {
         jotaiStore.set(

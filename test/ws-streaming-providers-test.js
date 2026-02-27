@@ -20,7 +20,7 @@ function runNextTest() {
   console.log(`\\n=== Testing Streaming for Provider: ${provider.toUpperCase()} ===`);
 
   const ws = new WebSocket('ws://localhost:3000');
-  
+
   let conversationId = null;
   let receivedChunks = '';
   let receivedAssistantMessage = false;
@@ -55,21 +55,25 @@ function runNextTest() {
 
     switch (msg.type) {
       case 'init':
-        ws.send(JSON.stringify({
-          type: 'new_conversation',
-          workingDirectory: process.cwd(),
-          provider: provider,
-        }));
+        ws.send(
+          JSON.stringify({
+            type: 'new_conversation',
+            workingDirectory: process.cwd(),
+            provider: provider,
+          })
+        );
         break;
 
       case 'conversation_created':
         conversationId = msg.conversation.id;
         console.log(`[WS] Conversation created: ${conversationId}`);
-        ws.send(JSON.stringify({
-          type: 'send_message',
-          conversationId,
-          content: 'Count from 1 to 3.',
-        }));
+        ws.send(
+          JSON.stringify({
+            type: 'send_message',
+            conversationId,
+            content: 'Count from 1 to 3.',
+          })
+        );
         break;
 
       case 'message':
@@ -78,12 +82,21 @@ function runNextTest() {
           console.log(`[WS] Empty assistant message created for ${provider}`);
         } else if (msg.role === 'system') {
           const content = msg.content.toLowerCase();
-          if (content.includes('out of tokens') || content.includes('token limit') || content.includes('quota') || content.includes('insufficient')) {
-            console.log(`\\n[WARN] ${provider.toUpperCase()} is out of credits/tokens. Skipping failure. Content: "${msg.content}"`);
+          if (
+            content.includes('out of tokens') ||
+            content.includes('token limit') ||
+            content.includes('quota') ||
+            content.includes('insufficient')
+          ) {
+            console.log(
+              `\\n[WARN] ${provider.toUpperCase()} is out of credits/tokens. Skipping failure. Content: "${msg.content}"`
+            );
             next();
           } else if (content.includes('exited with code') || content.includes('error')) {
-             console.log(`\\n[WARN] ${provider.toUpperCase()} emitted system error: "${msg.content}". Treating as WARN to avoid blocking test suite.`);
-             next();
+            console.log(
+              `\\n[WARN] ${provider.toUpperCase()} emitted system error: "${msg.content}". Treating as WARN to avoid blocking test suite.`
+            );
+            next();
           }
         }
         break;
@@ -91,26 +104,32 @@ function runNextTest() {
       case 'chunk':
         receivedChunks += msg.text || '';
         if (msg.text && !isStreamingDetected) {
-           console.log(`[WS] First text chunk received for ${provider}`);
-           isStreamingDetected = true;
+          console.log(`[WS] First text chunk received for ${provider}`);
+          isStreamingDetected = true;
         }
         break;
 
       case 'status':
         if (msg.isStreaming && !receivedAssistantMessage) {
-          console.error(`[ERROR] isStreaming was true before the empty assistant message was broadcast!`);
+          console.error(
+            '[ERROR] isStreaming was true before the empty assistant message was broadcast!'
+          );
         }
 
         if (!msg.isRunning && receivedAssistantMessage && !completed && !hasTimeout) {
           if (receivedChunks.length > 0) {
             console.log(`[SUCCESS] ${provider} completed streaming successfully with chunks.`);
           } else {
-            console.log(`[SUCCESS] ${provider} completed successfully. Assistant message was initialized.`);
+            console.log(
+              `[SUCCESS] ${provider} completed successfully. Assistant message was initialized.`
+            );
           }
           next();
         } else if (!msg.isRunning && !receivedAssistantMessage && !completed && !hasTimeout) {
-            console.log(`\\n[WARN] ${provider.toUpperCase()} completed without creating an assistant message. Probably failed immediately.`);
-            next();
+          console.log(
+            `\\n[WARN] ${provider.toUpperCase()} completed without creating an assistant message. Probably failed immediately.`
+          );
+          next();
         }
         break;
     }

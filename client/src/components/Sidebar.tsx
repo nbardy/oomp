@@ -218,19 +218,16 @@ export function Sidebar() {
       });
   }, [provider]);
 
-  const handleNewConversation = useCallback(
-    () => {
-      // Default to the most recently active conversation's working directory,
-      // then uiStore fallback, then server cwd.
-      const latestConv = allConversations[0];
-      const lastDir = latestConv?.workingDirectory ?? lastWorkingDirectory ?? defaultCwd ?? '/';
-      setDirectory(lastDir);
-      setHasPendingDefault(true);
-      setModalError(null);
-      setShowPicker(true);
-    },
-    [allConversations, lastWorkingDirectory, defaultCwd]
-  );
+  const handleNewConversation = useCallback(() => {
+    // Default to the most recently active conversation's working directory,
+    // then uiStore fallback, then server cwd.
+    const latestConv = allConversations[0];
+    const lastDir = latestConv?.workingDirectory ?? lastWorkingDirectory ?? defaultCwd ?? '/';
+    setDirectory(lastDir);
+    setHasPendingDefault(true);
+    setModalError(null);
+    setShowPicker(true);
+  }, [allConversations, lastWorkingDirectory, defaultCwd]);
 
   const handleOpenNewSwarmFlow = useCallback(() => {
     handleNewConversation();
@@ -355,6 +352,8 @@ export function Sidebar() {
                 title="Search conversations (Cmd+K)"
               >
                 <svg
+                  role="img"
+                  aria-label="icon"
                   className="nav-search-icon"
                   width="12"
                   height="12"
@@ -542,7 +541,14 @@ export function Sidebar() {
                 onClick={() => setSidebarViewMode('grouped')}
                 title="Grouped by folder"
               >
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                <svg
+                  role="img"
+                  aria-label="icon"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 14 14"
+                  fill="none"
+                >
                   <rect
                     x="1"
                     y="1"
@@ -571,7 +577,14 @@ export function Sidebar() {
                 onClick={() => setSidebarViewMode('list')}
                 title="Flat list"
               >
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                <svg
+                  role="img"
+                  aria-label="icon"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 14 14"
+                  fill="none"
+                >
                   <rect x="1" y="1" width="12" height="2" rx="0.5" fill="currentColor" />
                   <rect x="1" y="4.5" width="12" height="2" rx="0.5" fill="currentColor" />
                   <rect x="1" y="8" width="12" height="2" rx="0.5" fill="currentColor" />
@@ -625,7 +638,14 @@ export function Sidebar() {
                             setShowSearch(true);
                           }}
                         >
-                          <svg width="10" height="10" viewBox="0 0 16 16" fill="none">
+                          <svg
+                            role="img"
+                            aria-label="icon"
+                            width="10"
+                            height="10"
+                            viewBox="0 0 16 16"
+                            fill="none"
+                          >
                             <circle cx="7" cy="7" r="5.5" stroke="currentColor" strokeWidth="2" />
                             <line
                               x1="11"

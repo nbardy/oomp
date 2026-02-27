@@ -1,24 +1,27 @@
 # oomp
 
-A hackable client for agentic programming.
-
-Auto-reloads and lets you edit your own programming environment with agents as you code. Wishing your agent tool had a feature you need? Just open a conversation on `~/git/oomp` and ask for it.
-
-Just like Vim and Emacs ruled the old engineering flow with their open-source extension ecosystems, oomp provides that same hackable baseline for the agent era.
+A cross-client layer on top of agent swarms.
 
 ![oomp](docs/screenshots/gallery.png)
 
-## What it does
+## The problem
 
-A conversational UI for both individual agent chats and launching agent swarms. Built on top of [oompa](https://github.com/nbardy/oompa) (an open-source swarm library) and a shared CLI interface. Provides a modern web-based UI to get away from the slowness and feature-poor setup of TUIs.
+You run agents from different CLIs — Claude Code, Codex, Gemini, OpenCode. Each has its own terminal, its own session history, its own way of showing what happened. When you're running a swarm of agents across a codebase, there's no single place to see what's going on, steer the work, or review what was done.
 
-No more flipping between many CLIs trying to remember which one you did which work in. Cross-model, cross-client — one place for everything.
+## What oomp does
 
-**Features:**
-- Inline hover previews for image paths and videos
-- Multiple color palettes
-- Cross-agent folder-based organization
-- Cross-agent search
+Two things:
+
+**1. Visibility and organization across all your agents.**
+See every conversation from every CLI agent, organized by project. Search across all of them. No more flipping between terminals trying to remember which agent you asked to do what.
+
+**2. Launch and manage long-running agent swarms.**
+Swarms are treated as two things at once:
+
+- **Background jobs** — they run in a loop, autonomously, without interruption.
+- **Artifacts** — they can be inspected, discussed, and steered through conversation.
+
+Swarms continue without you. But you guide them. From the same chat interface, you can launch a swarm, check its progress, debug a failing worker, or review its output.
 
 ### Swarm Analytics
 
