@@ -2328,6 +2328,7 @@ function findDocCandidates(projectRoot: string): string[] {
     'docs/README.md',
     'docs/SWARM_GUIDE.md',
     'docs/OOMPA.md',
+    'docs/EDN_TICKETS.md',
   ];
   const seen = new Set<string>();
   const result: string[] = [];
@@ -3060,42 +3061,42 @@ app.post('/api/settings', (req: Request, res: Response) => {
 
 const PALETTES_DIR = path.join(os.homedir(), '.agent-viewer', 'palettes');
 
-/** The 14 color keys that make up a Palette16 (excluding 'name') */
+/** The 14 semantic keys that make up a Palette16 (excluding 'name') */
 const PALETTE16_KEYS = [
-  'base03',
-  'base02',
-  'base01',
-  'base00',
-  'base0',
-  'base1',
-  'yellow',
-  'orange',
-  'red',
-  'magenta',
-  'violet',
-  'blue',
-  'cyan',
-  'green',
+  'bgCanvas',
+  'bgSurface',
+  'textMuted',
+  'textSubtle',
+  'textBody',
+  'textBright',
+  'primary',
+  'user',
+  'ai',
+  'success',
+  'warning',
+  'queue',
+  'danger',
+  'meta',
 ] as const;
 
 /** Shape stored on disk — Palette16 values plus description for provenance */
 interface StoredPalette {
   name: string;
   description: string;
-  base03: string;
-  base02: string;
-  base01: string;
-  base00: string;
-  base0: string;
-  base1: string;
-  yellow: string;
-  orange: string;
-  red: string;
-  magenta: string;
-  violet: string;
-  blue: string;
-  cyan: string;
-  green: string;
+  bgCanvas: string;
+  bgSurface: string;
+  textMuted: string;
+  textSubtle: string;
+  textBody: string;
+  textBright: string;
+  primary: string;
+  user: string;
+  ai: string;
+  success: string;
+  warning: string;
+  queue: string;
+  danger: string;
+  meta: string;
 }
 
 // =============================================================================
@@ -3188,53 +3189,55 @@ app.post('/api/generate-palette', (req: Request, res: Response) => {
   const providerName = (req.query.provider as string) || 'claude';
   getProvider(providerName as ProviderName);
 
-  // 4 example palettes from our library so the AI understands the color system
+  // 4 example palettes from our library so the AI understands the semantic color system
   const examplePalettes = `
-Here are 4 example palettes from our library for reference:
+Here are 4 example palettes from our library for reference. Keys are semantic roles, not literal colors:
 
 Solarized Dark:
-{"name":"Solarized Dark","base03":"#002b36","base02":"#073642","base01":"#586e75","base00":"#657b83","base0":"#839496","base1":"#93a1a1","yellow":"#b58900","orange":"#cb4b16","red":"#dc322f","magenta":"#d33682","violet":"#6c71c4","blue":"#268bd2","cyan":"#2aa198","green":"#859900"}
+{"name":"Solarized Dark","bgCanvas":"#002b36","bgSurface":"#073642","textMuted":"#586e75","textSubtle":"#657b83","textBody":"#839496","textBright":"#93a1a1","primary":"#6c71c4","user":"#268bd2","ai":"#2aa198","success":"#859900","warning":"#b58900","queue":"#cb4b16","danger":"#dc322f","meta":"#d33682"}
 
 Nord:
-{"name":"Nord","base03":"#2e3440","base02":"#3b4252","base01":"#4c566a","base00":"#d8dee9","base0":"#e5e9f0","base1":"#eceff4","yellow":"#ebcb8b","orange":"#d08770","red":"#bf616a","magenta":"#b48ead","violet":"#5e81ac","blue":"#81a1c1","cyan":"#88c0d0","green":"#a3be8c"}
+{"name":"Nord","bgCanvas":"#2e3440","bgSurface":"#3b4252","textMuted":"#4c566a","textSubtle":"#d8dee9","textBody":"#e5e9f0","textBright":"#eceff4","primary":"#5e81ac","user":"#81a1c1","ai":"#88c0d0","success":"#a3be8c","warning":"#ebcb8b","queue":"#d08770","danger":"#bf616a","meta":"#b48ead"}
 
 Tokyo Night:
-{"name":"Tokyo Night","base03":"#1a1b26","base02":"#24283b","base01":"#414868","base00":"#565f89","base0":"#a9b1d6","base1":"#c0caf5","yellow":"#e0af68","orange":"#ff9e64","red":"#f7768e","magenta":"#bb9af7","violet":"#7aa2f7","blue":"#7dcfff","cyan":"#7dcfff","green":"#9ece6a"}
+{"name":"Tokyo Night","bgCanvas":"#1a1b26","bgSurface":"#24283b","textMuted":"#414868","textSubtle":"#565f89","textBody":"#a9b1d6","textBright":"#c0caf5","primary":"#7aa2f7","user":"#7dcfff","ai":"#7dcfff","success":"#9ece6a","warning":"#e0af68","queue":"#ff9e64","danger":"#f7768e","meta":"#bb9af7"}
 
 Catppuccin Mocha:
-{"name":"Catppuccin Mocha","base03":"#1e1e2e","base02":"#313244","base01":"#45475a","base00":"#6c7086","base0":"#cdd6f4","base1":"#bac2de","yellow":"#f9e2af","orange":"#fab387","red":"#f38ba8","magenta":"#cba6f7","violet":"#89b4fa","blue":"#89dceb","cyan":"#94e2d5","green":"#a6e3a1"}`;
+{"name":"Catppuccin Mocha","bgCanvas":"#1e1e2e","bgSurface":"#313244","textMuted":"#45475a","textSubtle":"#6c7086","textBody":"#cdd6f4","textBright":"#bac2de","primary":"#89b4fa","user":"#89dceb","ai":"#94e2d5","success":"#a6e3a1","warning":"#f9e2af","queue":"#fab387","danger":"#f38ba8","meta":"#cba6f7"}`;
 
-  const prompt = `Design a 16-token color palette for a dark-themed code editor UI based on this description: "${description.trim()}"
+  const prompt = `Design a 14-token semantic color palette for a dark-themed code editor UI based on this description: "${description.trim()}"
 ${examplePalettes}
 
 You MUST respond with ONLY a JSON object (no markdown, no explanation) with exactly these 15 keys:
 {
   "name": "Palette Name",
-  "base03": "#hex",
-  "base02": "#hex",
-  "base01": "#hex",
-  "base00": "#hex",
-  "base0": "#hex",
-  "base1": "#hex",
-  "yellow": "#hex",
-  "orange": "#hex",
-  "red": "#hex",
-  "magenta": "#hex",
-  "violet": "#hex",
-  "blue": "#hex",
-  "cyan": "#hex",
-  "green": "#hex"
+  "bgCanvas": "#hex",
+  "bgSurface": "#hex",
+  "textMuted": "#hex",
+  "textSubtle": "#hex",
+  "textBody": "#hex",
+  "textBright": "#hex",
+  "primary": "#hex",
+  "user": "#hex",
+  "ai": "#hex",
+  "success": "#hex",
+  "warning": "#hex",
+  "queue": "#hex",
+  "danger": "#hex",
+  "meta": "#hex"
 }
 
 Requirements:
 - All values must be valid #RRGGBB hex strings.
-- base03 must be the darkest (the main background). base02 slightly lighter (surface/card bg).
-- base01 = muted/comment text. base00 = secondary text. base0 = primary body text. base1 = emphasis text.
-- Monotonic luminance: base03 (darkest) < base02 < base01 < base00 < base0 <= base1 (lightest).
-- The 8 accent colors (yellow, orange, red, magenta, violet, blue, cyan, green) should be visually distinct.
-- Accent colors should have good contrast (WCAG AA, >= 4.5:1) against the base03 background.
-- Prefer perceptually uniform accent lightness (all accents roughly equal perceived brightness).
-- base03 should be very dark (suitable for long coding sessions).`;
+- bgCanvas must be the darkest (the main background). bgSurface slightly lighter (surface/card bg).
+- textMuted = muted/comment text. textSubtle = secondary text. textBody = primary body text. textBright = emphasis text.
+- Monotonic luminance: bgCanvas (darkest) < bgSurface < textMuted < textSubtle < textBody <= textBright (lightest).
+- The 8 intent colors (primary, user, ai, success, warning, queue, danger, meta) should be visually distinct.
+- Intent colors should have good contrast (WCAG AA, >= 4.5:1) against the bgCanvas background.
+- Monochromatic and analogous palettes are encouraged — you don't need rainbow variety.
+  For example, a "forest" theme might use green-tinted variants for most intents.
+- Prefer perceptually uniform accent lightness (all intents roughly equal perceived brightness).
+- bgCanvas should be very dark (suitable for long coding sessions).`;
 
   // Use cached counter instead of scanning filesystem
   const n = nextPaletteNumber;
@@ -3327,20 +3330,20 @@ Requirements:
       const stored: StoredPalette = {
         name: parsed.name,
         description: description.trim(),
-        base03: parsed.base03,
-        base02: parsed.base02,
-        base01: parsed.base01,
-        base00: parsed.base00,
-        base0: parsed.base0,
-        base1: parsed.base1,
-        yellow: parsed.yellow,
-        orange: parsed.orange,
-        red: parsed.red,
-        magenta: parsed.magenta,
-        violet: parsed.violet,
-        blue: parsed.blue,
-        cyan: parsed.cyan,
-        green: parsed.green,
+        bgCanvas: parsed.bgCanvas,
+        bgSurface: parsed.bgSurface,
+        textMuted: parsed.textMuted,
+        textSubtle: parsed.textSubtle,
+        textBody: parsed.textBody,
+        textBright: parsed.textBright,
+        primary: parsed.primary,
+        user: parsed.user,
+        ai: parsed.ai,
+        success: parsed.success,
+        warning: parsed.warning,
+        queue: parsed.queue,
+        danger: parsed.danger,
+        meta: parsed.meta,
       };
 
       // Build Palette16 shape for client and cache
