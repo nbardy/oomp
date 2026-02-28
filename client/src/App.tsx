@@ -17,6 +17,7 @@ import { useWebSocket } from './hooks/useWebSocket';
 import { initSettings } from './stores/settingsStore';
 import { useUIStore } from './stores/uiStore';
 import './App.css';
+import { AgentAuditOverlay } from './components/AgentAuditOverlay';
 
 /**
  * Connects the useWebSocket hook to the Jotai atom store.
@@ -91,6 +92,7 @@ function App() {
   return (
     <Provider store={jotaiStore}>
       <BrowserRouter>
+        <AgentAuditOverlay />
         <Routes>
           <Route path="/robot" element={<RobotLoader />} />
           <Route path="/*" element={<AppLayout />} />

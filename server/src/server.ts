@@ -1,3 +1,4 @@
+let startupAuditResults: any[] = [];
 import { type ChildProcess, execSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import { EventEmitter } from 'node:events';
@@ -32,6 +33,7 @@ import { type ProviderEvent, getProvider, providers } from './providers';
 import { isModelIdValidForProvider, modelValidationHint } from './providers/model-validation';
 
 import multer from 'multer';
+import { auditLocalAgents } from './audit.js';
 
 const VERBOSE = process.env.VERBOSE === '1' || process.argv.includes('--verbose');
 
@@ -1728,6 +1730,10 @@ function writeSettingsAsync(settings: Settings): void {
     }
   })();
 }
+
+app.get('/api/audit', (_req: Request, res: Response) => {
+  res.json(startupAuditResults);
+});
 
 app.get('/api/settings', (_req: Request, res: Response) => {
   res.json(getSettings());
@@ -4487,6 +4493,8 @@ function startFilePolling(): void {
 }
 
 async function startServer(): Promise<void> {
+  startupAuditResults = auditLocalAgents();
+
   // Initialize caches before opening the port
   await initSettingsCache();
   await initPaletteCache();

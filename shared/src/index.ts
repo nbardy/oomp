@@ -56,7 +56,7 @@ export {
   // Utility functions
   extractTextFromContentBlocks,
   extractToolUseFromContentBlocks,
-} from './providers/claude.types';
+} from './providers/claude.types.js';
 
 // Codex CLI types - strict type definitions for Codex CLI JSON protocol
 export {
@@ -107,7 +107,7 @@ export {
   codexOutputToUnifiedEvent,
   parseCodexOutputToUnifiedEvent,
   formatCodexInput,
-} from './providers/codex.types';
+} from './providers/codex.types.js';
 
 // =============================================================================
 // Core Data Structures
@@ -760,7 +760,7 @@ export {
   isJsonlThinkingBlock,
   isJsonlToolUseBlock,
   isJsonlToolResultBlock,
-} from './adapters/jsonl.types';
+} from './adapters/jsonl.types.js';
 
 // Oompa raw JSON file types (auto-generated from oompa_loompas schemas)
 export type {
@@ -768,7 +768,7 @@ export type {
   OompaReviewLog,
   OompaStarted,
   OompaStopped,
-} from './generated/oompa-types';
+} from './generated/oompa-types.js';
 
 // Codex Native Session Types (for reading ~/.codex/sessions/)
 export {
@@ -798,4 +798,4 @@ export {
   isCodexFunctionCallOutput,
   isCodexUserMessageEvent,
   isCodexAgentMessageEvent,
-} from './adapters/codex-session.types';
+} from './adapters/codex-session.types.js';
