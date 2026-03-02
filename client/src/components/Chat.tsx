@@ -169,6 +169,7 @@ export function Chat() {
   }, [id]);
 
   const [hasInput, setHasInput] = useState(false);
+  const [threadCopied, setThreadCopied] = useState(false);
   const [showPalette, setShowPalette] = useState(false);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>(EMPTY_PENDING);
@@ -405,6 +406,16 @@ export function Chat() {
     return buildUnifiedSubAgents(conversation, childSessionConversations);
   }, [conversation, childSessionConversations]);
 
+  const handleCopyThread = useCallback(async () => {
+    const text = messageGroups
+      .flatMap((g) => g.messages)
+      .map((msg) => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`)
+      .join('\n\n');
+    await navigator.clipboard.writeText(text);
+    setThreadCopied(true);
+    setTimeout(() => setThreadCopied(false), 2000);
+  }, [messageGroups]);
+
   if (!conversation) {
     return (
       <div className="chat-view">
@@ -591,6 +602,18 @@ export function Chat() {
           {timeAgo && <span className="chat-time-ago">{timeAgo}</span>}
         </div>
         <div className="header-status">
+          <button
+            type="button"
+            className={`copy-thread-btn${threadCopied ? ' copied' : ''}`}
+            onClick={handleCopyThread}
+            title="Copy full thread"
+          >
+            {threadCopied ? (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+            ) : (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            )}
+          </button>
           {!confirmed && <div className="ready-badge waiting">Starting...</div>}
           {currentMessage && (
             <div className="current-message-badge" title="Currently processing">

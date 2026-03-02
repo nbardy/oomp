@@ -408,6 +408,33 @@
   gap: 12px;
 }
 
+.copy-thread-btn {
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  padding: 4px;
+  transition: opacity 0.15s, color 0.15s;
+}
+
+.chat-header:hover .copy-thread-btn {
+  opacity: 1;
+}
+
+.copy-thread-btn:hover {
+  color: var(--ai-bright);
+}
+
+.copy-thread-btn.copied {
+  color: var(--accent-success, #4caf50);
+  opacity: 1;
+}
+
 /* Ready badge in header */
 .ready-badge {
   display: inline-flex;

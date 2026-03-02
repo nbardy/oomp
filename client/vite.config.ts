@@ -5,9 +5,11 @@ import { defineConfig } from 'vite';
 export default defineConfig({
   plugins: [react()],
   server: {
+    port: 7489,
+    open: true,
     proxy: {
       '/ws': {
-        target: 'ws://localhost:3000',
+        target: 'ws://localhost:7499',
         ws: true,
         // Suppress EPIPE/ECONNRESET noise during backend restarts.
         // Vite reconnects automatically — these errors are expected and transient.
@@ -24,7 +26,7 @@ export default defineConfig({
         },
       },
       '/api': {
-        target: 'http://localhost:3000',
+        target: 'http://localhost:7499',
       },
     },
   },

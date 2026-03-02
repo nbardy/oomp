@@ -123,6 +123,7 @@ const MIN_SEARCH_QUERY_LENGTH = 2;
 const SEARCH_MAX_RESULTS = 50;
 const SEARCH_HARD_RESULT_LIMIT = 200;
 const LOG_CONTENT_PREVIEW_CHARS = 140;
+const HOME_DIR = os.homedir();
 const STARTUP_INITIAL_LOAD_LIMIT = readPositiveIntEnv('CWV_STARTUP_INITIAL_LOAD_LIMIT', 500);
 const STARTUP_PARSE_CONCURRENCY = readPositiveIntEnv('CWV_STARTUP_PARSE_CONCURRENCY', 16);
 const STARTUP_LOAD_BATCH_SIZE = readPositiveIntEnv('CWV_STARTUP_BATCH_SIZE', 100);
@@ -146,6 +147,44 @@ function readPositiveIntEnv(name: string, fallback: number): number {
 
 function formatLogPreview(content: string, maxChars = LOG_CONTENT_PREVIEW_CHARS): string {
   return content.replace(/\s+/g, ' ').slice(0, maxChars);
+}
+
+function expandHomeAlias(inputPath: string): string {
+  if (inputPath === '~') return HOME_DIR;
+  if (inputPath.startsWith('~/')) return path.join(HOME_DIR, inputPath.slice(2));
+  if (path.sep === '\\' && inputPath.startsWith('~\\')) {
+    return path.join(HOME_DIR, inputPath.slice(2));
+  }
+  if (inputPath.startsWith('~')) {
+    return inputPath.replace(/^~/, HOME_DIR);
+  }
+  return inputPath;
+}
+
+function normalizeDirectoryInput(inputPath: string): string {
+  const trimmed = inputPath.trim();
+  if (!trimmed) return '';
+  return path.normalize(expandHomeAlias(trimmed));
+}
+
+function resolveWorkingDirectoryInput(
+  inputPath: string | null | undefined,
+  fallback = process.cwd()
+): string {
+  const normalized = normalizeDirectoryInput(inputPath ?? '');
+  const resolved = path.resolve(normalized || fallback);
+  const root = path.parse(resolved).root;
+  if (resolved === root) return resolved;
+  return resolved.replace(/[\\/]+$/, '');
+}
+
+function displayPathWithHomeAlias(resolvedPath: string, useHomeAlias: boolean): string {
+  if (!useHomeAlias) return resolvedPath;
+  if (resolvedPath === HOME_DIR) return '~';
+  if (resolvedPath.startsWith(`${HOME_DIR}${path.sep}`)) {
+    return `~${resolvedPath.slice(HOME_DIR.length)}`;
+  }
+  return resolvedPath;
 }
 
 function registerSessionAlias(sessionId: string | null | undefined, conversationId: string): void {
@@ -264,6 +303,21 @@ function normalizeProviderErrorMessage(message: string): string {
   if (/^out of tokens:/i.test(trimmed)) return trimmed;
   return `Out of tokens: ${trimmed}`;
 }
+
+// =============================================================================
+// Process Spawning Mutex
+// =============================================================================
+// Prevents concurrent CLI executions from fighting over token refresh logic on startup.
+const globalSpawnMutex = {
+  queue: Promise.resolve(),
+  lock: function() {
+    let resolve!: () => void;
+    const next = new Promise<void>((r) => (resolve = r));
+    const current = this.queue;
+    this.queue = this.queue.then(() => next);
+    return { wait: current, release: resolve };
+  }
+};
 
 // =============================================================================
 // Conversation Class
@@ -1368,17 +1422,9 @@ wss.on('connection', (ws: WebSocket) => {
         case 'new_conversation': {
           // Use client-provided UUID if present (optimistic insert), otherwise generate one
           const id = data.id || uuidv4();
-          // Expand ~ to home directory
-          let workingDir = data.workingDirectory || process.cwd();
-          if (workingDir.startsWith('~')) {
-            workingDir = workingDir.replace(
-              /^~/,
-              process.env.HOME || process.env.USERPROFILE || ''
-            );
-          }
-          // Resolve to absolute path and normalize: remove trailing slashes, resolve . and ..
-          // so "/foo/bar/" and "/foo/bar" group as the same project
-          workingDir = path.resolve(workingDir).replace(/\/+$/, '');
+          // Resolve input consistently across WS and REST path endpoints.
+          // Keeps '/' valid while normalizing '/foo/bar/' to '/foo/bar'.
+          const workingDir = resolveWorkingDirectoryInput(data.workingDirectory);
           const provider = data.provider || 'claude'; // Support 'claude', 'codex', or 'opencode'
           const model = data.model; // Provider-specific model (undefined = provider default)
           const swarmDebugPrefix = data.swarmDebugPrefix ?? null;
@@ -1416,11 +1462,11 @@ wss.on('connection', (ws: WebSocket) => {
               );
               return;
             }
-          } catch (_err) {
+          } catch {
             ws.send(
               JSON.stringify({
                 type: 'error',
-                message: `Directory not found: ${workingDir}`,
+                message: `No matching folder: ${workingDir}`,
               })
             );
             return;
@@ -1889,19 +1935,20 @@ app.get('/api/search', (req: Request, res: Response) => {
 // Path autocomplete API - returns directory listings for a given path
 // Used by the PathAutocomplete component in the new conversation dialog
 app.get('/api/paths', async (req: Request, res: Response) => {
-  const inputPath = (req.query.path as string) || '';
+  const inputPath = typeof req.query.path === 'string' ? req.query.path : '';
+  const trimmedInput = inputPath.trim();
+  const useHomeAlias = trimmedInput.startsWith('~');
 
   // Handle empty path - return home directory contents
-  if (!inputPath) {
+  if (!trimmedInput) {
     try {
-      const homeDir = os.homedir();
-      const entries = await fs.promises.readdir(homeDir, { withFileTypes: true });
+      const entries = await fs.promises.readdir(HOME_DIR, { withFileTypes: true });
       const results = entries
         .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
         .slice(0, 20)
         .map((entry) => ({
           name: entry.name,
-          path: path.join(homeDir, entry.name),
+          path: path.join(HOME_DIR, entry.name),
           isDirectory: true,
         }));
       res.json(results);
@@ -1911,14 +1958,13 @@ app.get('/api/paths', async (req: Request, res: Response) => {
     return;
   }
 
-  // Expand ~ to home directory
-  let expandedPath = inputPath;
-  if (expandedPath.startsWith('~')) {
-    expandedPath = expandedPath.replace(/^~/, os.homedir());
+  const normalizedPath = normalizeDirectoryInput(trimmedInput);
+  if (!normalizedPath) {
+    res.json([]);
+    return;
   }
-
-  // Normalize the path
-  const normalizedPath = path.normalize(expandedPath);
+  const partialSegment = path.basename(normalizedPath);
+  const includeHidden = partialSegment.startsWith('.');
 
   // Check if the path exists and is a directory
   try {
@@ -1927,11 +1973,13 @@ app.get('/api/paths', async (req: Request, res: Response) => {
       // Path is a complete directory - list its contents
       const entries = await fs.promises.readdir(normalizedPath, { withFileTypes: true });
       const results = entries
-        .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+        .filter(
+          (entry) => entry.isDirectory() && (includeHidden || !entry.name.startsWith('.'))
+        )
         .slice(0, 20)
         .map((entry) => ({
           name: entry.name,
-          path: path.join(normalizedPath, entry.name),
+          path: displayPathWithHomeAlias(path.join(normalizedPath, entry.name), useHomeAlias),
           isDirectory: true,
         }));
       res.json(results);
@@ -1943,7 +1991,7 @@ app.get('/api/paths', async (req: Request, res: Response) => {
 
   // Path might be partial - get parent directory and filter
   const parentDir = path.dirname(normalizedPath);
-  const partial = path.basename(normalizedPath).toLowerCase();
+  const partial = partialSegment.toLowerCase();
 
   try {
     const stats = await fs.promises.stat(parentDir);
@@ -1953,13 +2001,13 @@ app.get('/api/paths', async (req: Request, res: Response) => {
         .filter(
           (entry) =>
             entry.isDirectory() &&
-            !entry.name.startsWith('.') &&
+            (includeHidden || !entry.name.startsWith('.')) &&
             entry.name.toLowerCase().startsWith(partial)
         )
         .slice(0, 20)
         .map((entry) => ({
           name: entry.name,
-          path: path.join(parentDir, entry.name),
+          path: displayPathWithHomeAlias(path.join(parentDir, entry.name), useHomeAlias),
           isDirectory: true,
         }));
       res.json(results);
@@ -1975,52 +2023,49 @@ app.get('/api/paths', async (req: Request, res: Response) => {
 
 // Validate if a path exists and is a directory (used by PathAutocomplete validation)
 app.get('/api/validate-path', async (req: Request, res: Response) => {
-  const inputPath = (req.query.path as string) || '';
+  const inputPath = typeof req.query.path === 'string' ? req.query.path : '';
+  const trimmedInput = inputPath.trim();
 
-  if (!inputPath) {
+  if (!trimmedInput) {
     res.json({ valid: false, error: 'Empty path' });
     return;
   }
 
-  // Expand ~ to home directory
-  let expandedPath = inputPath;
-  if (expandedPath.startsWith('~')) {
-    expandedPath = expandedPath.replace(/^~/, os.homedir());
-  }
-
-  const normalizedPath = path.normalize(expandedPath);
+  const normalizedPath = normalizeDirectoryInput(trimmedInput);
+  const resolvedPath = path.resolve(normalizedPath);
 
   try {
-    const stats = await fs.promises.stat(normalizedPath);
+    const stats = await fs.promises.stat(resolvedPath);
     if (stats.isDirectory()) {
-      res.json({ valid: true, path: normalizedPath });
+      res.json({
+        valid: true,
+        path: displayPathWithHomeAlias(resolvedPath, trimmedInput.startsWith('~')),
+      });
     } else {
       res.json({ valid: false, error: 'Path is not a directory' });
     }
   } catch {
-    res.json({ valid: false, error: 'Directory not found' });
+    res.json({ valid: false, error: 'No matching folder' });
   }
 });
 
 // Create a directory (used by PathAutocomplete's "Create folder" option)
 app.post('/api/mkdir', express.json(), async (req: Request, res: Response) => {
-  const dirPath = req.body?.path as string | undefined;
-  if (!dirPath) {
+  const dirPath = typeof req.body?.path === 'string' ? req.body.path : '';
+  const trimmedInput = dirPath.trim();
+  if (!trimmedInput) {
     res.status(400).json({ error: 'Missing path' });
     return;
   }
 
-  // Expand ~ to home directory
-  let expandedPath = dirPath;
-  if (expandedPath.startsWith('~')) {
-    expandedPath = expandedPath.replace(/^~/, os.homedir());
-  }
-
-  const normalizedPath = path.normalize(expandedPath);
+  const normalizedPath = normalizeDirectoryInput(trimmedInput);
+  const resolvedPath = path.resolve(normalizedPath);
 
   try {
-    await fs.promises.mkdir(normalizedPath, { recursive: true });
-    res.json({ path: normalizedPath });
+    await fs.promises.mkdir(resolvedPath, { recursive: true });
+    res.json({
+      path: displayPathWithHomeAlias(resolvedPath, trimmedInput.startsWith('~')),
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to create directory';
     res.status(500).json({ error: message });
@@ -2059,9 +2104,10 @@ app.get('/api/files', (req: Request, res: Response) => {
 // Swarm Dashboard APIs — git log, oompa config, and file reading for the
 // /workers detail view. These are one-shot REST queries (not streaming).
 //
-// SECURITY: All endpoints restrict access to directories that are known to
-// the server as conversation working directories. This prevents arbitrary
-// filesystem access via crafted query parameters.
+// SECURITY: Endpoints that return file/diff data restrict access to
+// directories known to the server as conversation working directories.
+// /api/oompa-swarm-context intentionally accepts any existing local directory
+// so users can start a first swarm before a conversation already exists there.
 // =============================================================================
 
 /** Check if a resolved path is within any known conversation directory. */
@@ -2475,18 +2521,13 @@ function listAvailableConfigFiles(projectRoot: string): string[] {
 }
 
 app.get('/api/oompa-swarm-context', (req: Request, res: Response) => {
-  const dir = req.query.dir as string;
-  if (!dir || !dir.startsWith('/')) {
-    res.status(400).json({ error: 'Absolute directory path required' });
+  const dir = typeof req.query.dir === 'string' ? req.query.dir : '';
+  if (!dir.trim()) {
+    res.status(400).json({ error: 'Directory path required' });
     return;
   }
 
-  const projectRoot = path.resolve(dir);
-  // Security: restrict to directories associated with known conversations
-  if (!isUnderKnownProject(projectRoot)) {
-    res.status(403).json({ error: 'Directory not associated with any conversation' });
-    return;
-  }
+  const projectRoot = resolveWorkingDirectoryInput(dir);
   if (!fs.existsSync(projectRoot)) {
     res.status(404).json({ error: 'Directory does not exist' });
     return;
@@ -2827,7 +2868,7 @@ async function synthesizeSummary(
       harness: w.harness ?? 'default',
       model: w.model ?? 'unknown',
       status,
-      completed: latestCycleNum,
+      completed: merges + rejections,
       iterations: w.iterations ?? 0,
       merges,
       rejections,
@@ -2859,7 +2900,7 @@ async function synthesizeSummary(
     // Don't fabricate finished-at from started-at — null means "we don't know"
     'finished-at': isStopped ? latestTimestamp || null : isLive ? null : latestTimestamp || null,
     'total-workers': workers.length,
-    'total-completed': workers.filter((w) => w.status === 'completed').length,
+    'total-completed': workers.reduce((s, w) => s + w.completed, 0),
     'total-iterations': workers.reduce((s, w) => s + w.iterations, 0),
     'status-counts': {},
     workers,
@@ -4140,7 +4181,7 @@ process.on('SIGTERM', () => {
   }, HOT_RELOAD_DRAIN_MS);
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 7499;
 
 function checkPort(port: number): Promise<boolean> {
   return new Promise((resolve) => {
@@ -4358,7 +4399,10 @@ function findBootstrapMatch(
     
     // If the conversation already has a provider session ID assigned, skip it.
     // We know it's unassigned if sessionId === id (the UI-generated UUID).
-    if (conv.sessionId !== conv.id) continue;
+    // Exception: Gemini's CLI emits a session.started event with a random UUID
+    // that differs from the actual UUID written to the JSON file. We must allow
+    // findBootstrapMatch to re-bind Gemini sessions to their true on-disk ID.
+    if (conv.sessionId !== conv.id && conv.provider !== 'gemini') continue;
 
     if (conv.provider === 'opencode' && isOpenCodeSessionLike(conv.sessionId)) continue;
     if (conv.workingDirectory !== convData.workingDirectory) continue;
@@ -4607,7 +4651,8 @@ async function startServer(): Promise<void> {
   // Start listening FIRST so the Vite proxy can connect immediately.
   server.listen(portNumber, () => {
     console.log(`Server running on http://localhost:${portNumber}`);
-    const startUrl = `http://localhost:${portNumber}`;
+    const clientPort = process.env.NODE_ENV === 'development' ? 7489 : portNumber;
+    const startUrl = `http://localhost:${clientPort}`;
     const startCmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
     require('child_process').exec(`${startCmd} ${startUrl}`);
   });
