@@ -401,6 +401,55 @@
   margin-left: 0;
 }
 
+/* =============================================================================
+   Collapsed tool-calls group
+   Consecutive assistant messages that are purely tool-use lines are collapsed
+   into a single toggle row to reduce visual noise.
+   ============================================================================= */
+
+.tool-calls-group {
+  border-bottom: 1px solid color-mix(in srgb, var(--text-emphasis) 6%, transparent);
+}
+
+.tool-calls-toggle-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 22px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-family: var(--font-mono);
+  text-align: left;
+  transition: background 0.1s;
+}
+
+.tool-calls-toggle-btn:hover {
+  background: color-mix(in srgb, var(--text-emphasis) 4%, transparent);
+}
+
+.tool-calls-icon {
+  opacity: 0.6;
+  font-size: 11px;
+}
+
+.tool-calls-count {
+  flex: 1;
+  opacity: 0.7;
+}
+
+.tool-calls-chevron {
+  font-size: 9px;
+  opacity: 0.4;
+}
+
+.tool-calls-expanded {
+  border-top: 1px solid color-mix(in srgb, var(--text-emphasis) 4%, transparent);
+}
+
 /* Header status area */
 .header-status {
   display: flex;

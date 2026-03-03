@@ -1,7 +1,7 @@
 import type { Message } from '@unleashd/shared';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { Break, Root, Text } from 'mdast';
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import Markdown from 'react-markdown';
 import type { Components } from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
@@ -82,7 +82,7 @@ const remarkBreaks: Plugin<[], Root> = () => (tree) => {
 
 // Matches lines that are tool-emoji labels from our providers.
 // Pattern: emoji (possibly with variation selector) + space + text
-const TOOL_LINE_RE = /^(?:📖|✍️|✏️|⚡|📂|🔍|🌐|📓|🔧|▶️|📦|🔀|📁|🔒|🗑️|❌)\s+\S/;
+const TOOL_LINE_RE = /^(?:📖|✍️|✏️|⚡|💻|📂|🔍|🌐|📓|📝|🔧|▶️|📦|🔀|📁|🔒|🗑️|❌)\s+\S/;
 
 /** Minimum consecutive tool lines before collapsing */
 const COLLAPSE_THRESHOLD = 3;
@@ -119,8 +119,8 @@ function collapseToolLines(content: string): string {
   };
 
   for (const line of lines) {
-    // Check if it's an oompa run token — if so, never collapse it.
-    const isOompaRun = OOMPA_RUN_RE.test(line);
+    // Keep oompa run widget trigger lines visible (not collapsed into summaries).
+    const isOompaRun = OOMPA_RUN_TOOL_LINE_RE.test(line);
 
     if (!isOompaRun && TOOL_LINE_RE.test(line)) {
       toolRun.push(line);
@@ -338,11 +338,13 @@ type ContentSegment =
   | { type: 'ask_user_question'; json: string }
   | { type: 'oompa_run' };
 
-// Matches a single line starting with typical tool emoji and containing "oompa run"
-// Module-level regex without `g` flag — safe for `.test()` calls in collapseToolLines.
-// splitWidgets creates a local copy with `g` for multi-match `.exec()` loops,
-// avoiding stale `lastIndex` state on the shared singleton under concurrent rendering.
-const OOMPA_RUN_RE = /^(?:📖|✍️|✏️|⚡|📂|🔍|🌐|📓|🔧|▶️|📦|🔀|📁|🔒|🗑️|❌)\s+.*?\boompa\s+run\b.*$/m;
+// Only treat normalized shell tool_use lines as run-widget triggers.
+// This avoids false positives from plain assistant prose containing `oompa run`.
+//
+// Expected line shape from server/src/adapters/tool-format.ts:
+//   ⚡ Bash|shell|run_shell_command oompa run|swarm :: <command...>
+const OOMPA_RUN_TOOL_LINE_RE =
+  /^⚡\s+(?:bash|shell|run_shell_command)\s+oompa\s+(?:run|swarm)\s+::.*$/i;
 
 function splitWidgets(content: string): ContentSegment[] {
   const segments: ContentSegment[] = [];
@@ -353,7 +355,7 @@ function splitWidgets(content: string): ContentSegment[] {
 
   // Create a fresh regex with `g` flag for multi-match .exec() loop —
   // avoids stale lastIndex on the module-level ASK_USER_QUESTION_RE singleton
-  // (same pattern as OOMPA_RUN_RE below).
+  // (same pattern as OOMPA_RUN_TOOL_LINE_RE below).
   const askUserRe = new RegExp(ASK_USER_QUESTION_RE.source, ASK_USER_QUESTION_RE.flags + 'g');
   let match: RegExpExecArray | null;
   while ((match = askUserRe.exec(content)) !== null) {
@@ -361,8 +363,8 @@ function splitWidgets(content: string): ContentSegment[] {
   }
 
   // Create a fresh regex with `g` flag for multi-match .exec() loop —
-  // avoids stale lastIndex on the module-level OOMPA_RUN_RE singleton.
-  const oompaRunGlobal = new RegExp(OOMPA_RUN_RE.source, 'gm');
+  // avoids stale lastIndex on the module-level OOMPA_RUN_TOOL_LINE_RE singleton.
+  const oompaRunGlobal = new RegExp(OOMPA_RUN_TOOL_LINE_RE.source, 'gim');
   while ((match = oompaRunGlobal.exec(content)) !== null) {
     matches.push({ type: 'oompa_run', index: match.index, length: match[0].length, match });
   }
@@ -481,9 +483,24 @@ const MemoizedMessage = memo(
 // Message Group Types
 // =============================================================================
 
-export interface MessageGroup {
-  type: 'single';
-  messages: Message[];
+export type MessageGroup =
+  | { type: 'single'; messages: Message[] }
+  /** Two or more consecutive assistant messages that are purely tool-call lines */
+  | { type: 'tool_calls'; messages: Message[] };
+
+/**
+ * Returns true if the message is an assistant turn consisting entirely of
+ * tool-emoji lines (no explanatory prose). Used to group consecutive tool-only
+ * turns into a single collapsible block.
+ */
+export function isToolCallOnlyMessage(msg: Message): boolean {
+  if (msg.role !== 'assistant') return false;
+  const content = msg.content?.trim() ?? '';
+  if (!content) return false;
+  return content
+    .split('\n')
+    .filter((l) => l.trim().length > 0)
+    .every((l) => TOOL_LINE_RE.test(l.trim()));
 }
 
 interface VirtualizedMessageListProps {
@@ -503,16 +520,15 @@ interface VirtualizedMessageListProps {
 
 // Estimate height based on content — rough approximation before measurement
 function estimateGroupSize(group: MessageGroup): number {
-  // Estimate based on message content length
-  let totalHeight = 0;
+  if (group.type === 'tool_calls') return 36; // collapsed button height
 
+  let totalHeight = 0;
   for (const msg of group.messages) {
     const contentLength = msg.content?.length ?? 0;
     // Rough estimate: ~50px base + 20px per 100 chars
     const estimatedHeight = 80 + Math.ceil(contentLength / 100) * 20;
     totalHeight += Math.min(estimatedHeight, 600); // Cap at reasonable max
   }
-
   return Math.max(totalHeight, 60);
 }
 
@@ -699,6 +715,57 @@ export function VirtualizedMessageList({
 }
 
 // =============================================================================
+// CollapsedToolCallsGroup: Shows N tool-only assistant messages as a single
+// collapsible row. Collapsed by default to reduce noise.
+// =============================================================================
+
+interface CollapsedToolCallsGroupProps {
+  messages: Message[];
+  isLastGroup: boolean;
+  lastMessageRef: React.RefObject<HTMLDivElement | null>;
+  workingDirectory: string;
+}
+
+function CollapsedToolCallsGroup({
+  messages,
+  isLastGroup,
+  lastMessageRef,
+  workingDirectory,
+}: CollapsedToolCallsGroupProps) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <div className="tool-calls-group">
+      <button
+        type="button"
+        className={`tool-calls-toggle-btn${expanded ? ' expanded' : ''}`}
+        onClick={() => setExpanded((e) => !e)}
+      >
+        <span className="tool-calls-icon">⚡</span>
+        <span className="tool-calls-count">{messages.length} tool calls</span>
+        <span className="tool-calls-chevron">{expanded ? '▲' : '▼'}</span>
+      </button>
+      {expanded && (
+        <div className="tool-calls-expanded">
+          {messages.map((msg, mi) => {
+            const isLastMessage = isLastGroup && mi === messages.length - 1;
+            return (
+              <MemoizedMessage
+                key={mi}
+                msg={msg}
+                className={`message ${msg.role}`}
+                forwardedRef={isLastMessage ? lastMessageRef : undefined}
+                workingDirectory={workingDirectory}
+              />
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// =============================================================================
 // VirtualizedGroup: Renders a single message group
 // =============================================================================
 
@@ -716,6 +783,17 @@ const VirtualizedGroup = memo(
     lastMessageRef,
     workingDirectory,
   }: VirtualizedGroupProps) {
+    if (group.type === 'tool_calls') {
+      return (
+        <CollapsedToolCallsGroup
+          messages={group.messages}
+          isLastGroup={isLastGroup}
+          lastMessageRef={lastMessageRef}
+          workingDirectory={workingDirectory}
+        />
+      );
+    }
+
     return (
       <>
         {group.messages.map((msg, mi) => {

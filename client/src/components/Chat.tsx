@@ -29,7 +29,7 @@ import { formatTimeAgo } from '../utils/time';
 import { PromptPalette } from './PromptPalette';
 import { SubAgentPanel } from './SubAgentPanel';
 import { SwarmConvoPrefix } from './SwarmConvoPrefix';
-import { VirtualizedMessageList } from './VirtualizedMessageList';
+import { VirtualizedMessageList, isToolCallOnlyMessage } from './VirtualizedMessageList';
 import type { MessageGroup } from './VirtualizedMessageList';
 import './Chat.css';
 
@@ -392,13 +392,34 @@ export function Chat() {
   const messageGroups = useMemo((): MessageGroup[] => {
     if (!conversation) return [];
     const prefix = conversation.swarmDebugPrefix;
-    return conversationMessages.map((msg, i) => {
+    const groups: MessageGroup[] = [];
+    let toolCallRun: (typeof conversationMessages)[number][] = [];
+
+    const flushRun = () => {
+      if (toolCallRun.length >= 2) {
+        groups.push({ type: 'tool_calls', messages: toolCallRun });
+      } else {
+        for (const m of toolCallRun) groups.push({ type: 'single', messages: [m] });
+      }
+      toolCallRun = [];
+    };
+
+    conversationMessages.forEach((msg, i) => {
+      let displayMsg = msg;
       if (i === 0 && msg.role === 'user' && prefix && msg.content.startsWith(prefix)) {
         const stripped = msg.content.slice(prefix.length).replace(/^\n\n/, '');
-        return { type: 'single' as const, messages: [{ ...msg, content: stripped }] };
+        displayMsg = { ...msg, content: stripped };
       }
-      return { type: 'single' as const, messages: [msg] };
+      if (isToolCallOnlyMessage(displayMsg)) {
+        toolCallRun.push(displayMsg);
+      } else {
+        flushRun();
+        groups.push({ type: 'single', messages: [displayMsg] });
+      }
     });
+
+    flushRun();
+    return groups;
   }, [conversationMessages, conversation?.swarmDebugPrefix]);
 
   const unifiedSubAgents = useMemo(() => {
