@@ -30,6 +30,7 @@ import express, { type Request, type Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { WebSocket, WebSocketServer } from 'ws';
 import { loadAllConversations, pollForChanges } from './adapters/loader';
+import { formatToolUse, isCompletionOnlyToolUse } from './adapters/tool-format';
 import { type ProviderEvent, getProvider, providers } from './providers';
 import { isModelIdValidForProvider, modelValidationHint } from './providers/model-validation';
 
@@ -136,6 +137,8 @@ const HOT_RELOAD_FORCE_EXIT_GRACE_MS = readPositiveIntEnv(
 const TURN_IDLE_TIMEOUT_MS = readPositiveIntEnv('CWV_TURN_IDLE_TIMEOUT_MS', 10 * 60_000);
 const TURN_MAX_RUNTIME_MS = readPositiveIntEnv('CWV_TURN_MAX_RUNTIME_MS', 60 * 60_000);
 const TURN_TIMEOUT_KILL_GRACE_MS = readPositiveIntEnv('CWV_TURN_TIMEOUT_KILL_GRACE_MS', 5_000);
+const SWARM_POLL_INTERVAL_MS = readPositiveIntEnv('CWV_SWARM_POLL_INTERVAL_MS', 2_000);
+const SWARM_POLL_THROTTLE_MS = readPositiveIntEnv('CWV_SWARM_POLL_THROTTLE_MS', 1_500);
 
 function readPositiveIntEnv(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -427,8 +430,14 @@ class Conversation extends EventEmitter {
   private _turnMaxTimer: NodeJS.Timeout | null = null;
   // Track last known swarm run ID to detect newly launched swarms.
   private _lastSwarmRunId: string | null = null;
+  // Whether _lastSwarmRunId was explicitly baselined for the current turn.
+  // Distinguishes "no baseline yet" from "baseline exists and no prior run".
+  private _hasSwarmBaseline = false;
   // Throttle _pollForNewSwarms() — synchronous fs I/O called from _noteTurnActivity().
   private _lastSwarmPollAt = 0;
+  // Periodic swarm poller running during active turns (catches launches that happen
+  // after the last text/tool event).
+  private _swarmPollTimer: NodeJS.Timeout | null = null;
   // When true, message_complete already performed state cleanup (isStreaming/isRunning/broadcast).
   // The close handler checks this to skip redundant work on normal completion, while still
   // running full cleanup on crash/kill/error paths where message_complete never fired.
@@ -481,6 +490,7 @@ class Conversation extends EventEmitter {
     this._isResetting = false;
     this._wasResetDuringThisRun = false;
     this._lastSwarmRunId = null;
+    this._hasSwarmBaseline = false;
   }
 
   /**
@@ -514,6 +524,7 @@ class Conversation extends EventEmitter {
     this._turnCompletedCleanly = false;
     this._wasResetDuringThisRun = false;
     this._processStartTime = Date.now();
+    this._primeSwarmBaseline();
 
     const turn = executeCommand({
       harness: this.provider,
@@ -856,13 +867,21 @@ class Conversation extends EventEmitter {
             }
           }
 
-          // Broadcast tool usage info if displayText is provided
-          if (event.displayText) {
-            this.broadcastChunk({
-              type: 'chunk',
-              conversationId: this.id,
-              text: event.displayText,
-            });
+          // Normalize tool line formatting across providers (Claude/Gemini/Codex).
+          // Suppress Codex shell completion-only events to avoid duplicate lines.
+          if (!isCompletionOnlyToolUse(event.name, event.input, event.displayText)) {
+            const formattedTool = formatToolUse(event.name, event.input, event.displayText);
+            if (formattedTool) {
+              const chunkText =
+                formattedTool.startsWith('<!--ask_user_question:')
+                  ? formattedTool
+                  : `${formattedTool}\n`;
+              this.broadcastChunk({
+                type: 'chunk',
+                conversationId: this.id,
+                text: chunkText,
+              });
+            }
           }
         }
         break;
@@ -1050,6 +1069,7 @@ class Conversation extends EventEmitter {
     this._clearTurnWatchdogs();
     this._lastTurnEventAt = Date.now();
     this._refreshIdleWatchdog();
+    this._startSwarmPoller();
     this._turnMaxTimer = setTimeout(() => {
       this._handleTurnTimeout('max');
     }, TURN_MAX_RUNTIME_MS);
@@ -1077,49 +1097,44 @@ class Conversation extends EventEmitter {
    * Detects if the assistant launched a new Oompa Loompa Swarm by checking
    * the local runs directory for a new ID compared to what we saw previously.
    */
-  private _pollForNewSwarms(): void {
+  private _pollForNewSwarms(options?: { force?: boolean }): void {
     // Throttle: _noteTurnActivity() fires on every text_delta/tool_use (100+ per response).
     // Avoid synchronous fs I/O (readdirSync, statSync, readFileSync) on every event.
     const now = Date.now();
-    if (now - this._lastSwarmPollAt < 5_000) return;
+    if (!options?.force && now - this._lastSwarmPollAt < SWARM_POLL_THROTTLE_MS) return;
     this._lastSwarmPollAt = now;
 
     const snapshot = readLatestOompaRuntime(this.workingDirectory);
     if (!snapshot.available || !snapshot.run) return;
 
+    const run = snapshot.run;
     const currentRunId = snapshot.run.runId;
-    if (this._lastSwarmRunId === null) {
-      // First time checking, just record the baseline
+    if (!this._hasSwarmBaseline) {
+      // Safety fallback: baseline if a turn starts without _primeSwarmBaseline.
       this._lastSwarmRunId = currentRunId;
+      this._hasSwarmBaseline = true;
       return;
     }
 
-    if (currentRunId !== this._lastSwarmRunId) {
-      this._lastSwarmRunId = currentRunId;
-      const swarmId = snapshot.run.swarmId ?? currentRunId;
-      
-      console.log(`[${this.id}] Detected new swarm run: ${swarmId}`);
-      
-      const newAgent: SubAgent = {
-        id: `swarm-${currentRunId}`,
-        description: `Swarm Run: ${swarmId} (${snapshot.run.totalWorkers} workers)`,
-        status: 'running',
-        toolUses: 0,
-        tokens: 0,
-        currentAction: 'Running swarm...',
-        startedAt: new Date(),
-      };
+    const previousRunId = this._lastSwarmRunId;
+    if (previousRunId && previousRunId !== currentRunId) {
+      this._completeSwarmSubAgent(previousRunId);
+    }
 
-      this.subAgents.push(newAgent);
-      broadcastToAll({
-        type: 'subagent_start',
-        conversationId: this.id,
-        subAgent: newAgent,
-      });
+    if (currentRunId !== previousRunId) {
+      this._lastSwarmRunId = currentRunId;
+      if (!run.isRunning) return;
+      this._startSwarmSubAgent(run);
+      return;
+    }
+
+    if (!run.isRunning) {
+      this._completeSwarmSubAgent(currentRunId);
     }
   }
 
   private _clearTurnWatchdogs(): void {
+    this._stopSwarmPoller();
     if (this._turnIdleTimer) {
       clearTimeout(this._turnIdleTimer);
       this._turnIdleTimer = null;
@@ -1162,6 +1177,73 @@ class Conversation extends EventEmitter {
       }
     }, TURN_TIMEOUT_KILL_GRACE_MS);
     proc.once('close', () => clearTimeout(killTimer));
+  }
+
+  private _primeSwarmBaseline(): void {
+    const snapshot = readLatestOompaRuntime(this.workingDirectory);
+    this._lastSwarmRunId = snapshot.available && snapshot.run ? snapshot.run.runId : null;
+    this._hasSwarmBaseline = true;
+    this._lastSwarmPollAt = 0;
+  }
+
+  private _startSwarmPoller(): void {
+    this._stopSwarmPoller();
+    if (!this.isRunning) return;
+    this._swarmPollTimer = setInterval(() => {
+      this._pollForNewSwarms({ force: true });
+    }, SWARM_POLL_INTERVAL_MS);
+    this._swarmPollTimer.unref?.();
+    this._pollForNewSwarms({ force: true });
+  }
+
+  private _stopSwarmPoller(): void {
+    if (!this._swarmPollTimer) return;
+    clearInterval(this._swarmPollTimer);
+    this._swarmPollTimer = null;
+  }
+
+  private _startSwarmSubAgent(run: NonNullable<OompaRuntimeSnapshot['run']>): void {
+    const agentId = `swarm-${run.runId}`;
+    if (this.subAgents.some((a) => a.id === agentId)) return;
+
+    const swarmId = run.swarmId ?? run.runId;
+    console.log(`[${this.id}] Detected new running swarm: ${swarmId}`);
+
+    const newAgent: SubAgent = {
+      id: agentId,
+      description: `Swarm Run: ${swarmId} (${run.totalWorkers} workers)`,
+      status: 'running',
+      toolUses: 0,
+      tokens: 0,
+      currentAction: 'Running swarm...',
+      startedAt: new Date(),
+    };
+
+    this.subAgents.push(newAgent);
+    broadcastToAll({
+      type: 'subagent_start',
+      conversationId: this.id,
+      subAgent: newAgent,
+    });
+  }
+
+  private _completeSwarmSubAgent(runId: string): void {
+    const agentId = `swarm-${runId}`;
+    const swarmAgent = this.subAgents.find((a) => a.id === agentId);
+    if (!swarmAgent || swarmAgent.status !== 'running') return;
+
+    const completedAt = new Date();
+    swarmAgent.status = 'completed';
+    swarmAgent.currentAction = 'Done';
+    swarmAgent.completedAt = completedAt;
+
+    broadcastToAll({
+      type: 'subagent_complete',
+      conversationId: this.id,
+      subAgentId: agentId,
+      status: 'completed',
+      completedAt,
+    });
   }
 
   broadcastChunk(data: ChunkData | MessageCompleteData): void {
